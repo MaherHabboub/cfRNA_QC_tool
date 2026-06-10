@@ -282,18 +282,33 @@ submit_step \
 )
 qc_jobs+=("$strand_job")
 
-dropoff_job=$(
-submit_step \
-    "11" \
-    "dropoff" \
-    "Dropoff.sh" \
-    "06:00:00" \
-    "60G" \
-    "2" \
-    "afterok" \
-    "$bins_job"
-)
-qc_jobs+=("$dropoff_job")
+# ============================================================
+# 2c. Exon-intron dropoff
+# One job per sample, because this module can be slow and memory-intensive.
+# ============================================================
+
+echo "Submitting one Dropoff job per sample..." >&2
+
+while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION
+do
+    [[ -z "${SAMPLE:-}" ]] && continue
+
+    dropoff_job=$(
+    submit_step \
+        "11" \
+        "dropoff_${SAMPLE}" \
+        "Dropoff.sh" \
+        "12:00:00" \
+        "80G" \
+        "2" \
+        "afterok" \
+        "$bins_job" \
+        "$SAMPLE"
+    )
+
+    qc_jobs+=("$dropoff_job")
+
+done < <(tail -n +2 "$SAMPLESHEET")
 
 # Join QC jobs with colon for Slurm dependency
 qc_dep="$(IFS=:; echo "${qc_jobs[*]}")"
