@@ -1,0 +1,37 @@
+# Large sequencing files
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+*.bam
+*.bai
+*.sam
+*.cram
+
+# Large references and indexes
+*.fa
+*.fasta
+*.gtf
+*.gff
+*.bed
+genomeDir/
+STAR_index/
+
+# Large outputs / temporary folders
+results/
+outputs/
+logs/
+tmp/
+temp/
+
+# R / Python / cache
+.Rhistory
+.RData
+.Rproj.user/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# macOS / Windows
+.DS_Store
+Thumbs.db
