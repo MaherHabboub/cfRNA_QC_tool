@@ -1,0 +1,7 @@
+hgnc_symbol	ensembl_gene_id	chromosome_name	gene_biotype
+XIST	ENSG00000229807	X	lncRNA
+EIF1AY	ENSG00000198692	Y	protein_coding
+KDM5D	ENSG00000012817	Y	protein_coding
+UTY	ENSG00000183878	Y	protein_coding
+DDX3Y	ENSG00000067048	Y	protein_coding
+RPS4Y1	ENSG00000129824	Y	protein_coding
