@@ -273,7 +273,7 @@ Typical outputs include:
 - Exon-intron drop-off profiles and plots.
 - A MultiQC HTML report.
 - A final aggregated HPC QC summary TSV.
-- A ZIP archive of selected QC outputs.
+- A transfer bundle
 
 The local workflow writes results under the selected `out_root`. Typical outputs
 include:
@@ -293,23 +293,3 @@ Example generated reports are included in:
 example_reports/
 ```
 
-## Interpretation Scope
-
-This workflow is intended to support QC interpretation rather than make hard
-automated accept/reject decisions. It was tested and used on two cfRNA-seq
-datasets:
-
-- An internal high-quality CohortA dataset, used as a practical reference
-  profile for expected cfRNA-seq QC behavior.
-- The Silver-seq dataset, used as a contrasting dataset with problematic QC
-  features, especially patterns consistent with DNA contamination.
-
-Useful interpretation usually comes from comparing multiple outputs together:
-FASTQ quality, GC-content patterns, read distribution across genomic features,
-splice junction support, gene body coverage, exon-intron drop-off, fragment size
-profiles, strandedness, duplication, PCA structure, biotype composition,
-platelet contamination scores, and sex-marker expression.
-
-Because this is a thesis-developed research workflow, users should inspect
-paths, module versions, reference annotations, and assumptions before applying
-it to new cohorts.
