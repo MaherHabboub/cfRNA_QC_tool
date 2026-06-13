@@ -13,6 +13,8 @@ patterns such as fragment size profiles, gene body coverage, exon-intron
 drop-off, splice junction support, biotype composition, platelet signals, and
 possible DNA contamination patterns.
 
+![cfRNA QC workflow overview](cfRNA_QC_workflow.jpg)
+
 ## Repository Structure
 
 ```text
@@ -292,4 +294,3 @@ Example generated reports are included in:
 ```text
 example_reports/
 ```
-
