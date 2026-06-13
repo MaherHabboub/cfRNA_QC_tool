@@ -1,0 +1,33 @@
+name: cfrna-qc-hpc
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  # Shell/runtime utilities used by submit_HPC_QC.sh and module scripts.
+  - bash
+  - coreutils
+  - gawk
+  - sed
+  - grep
+  - unzip
+
+  # Python libraries used by embedded Python blocks in HPC_tool/modules.
+  - python>=3.10
+  - pandas
+  - numpy
+  - matplotlib
+
+  # Bioinformatics command-line tools used by the HPC QC modules.
+  # On a managed HPC, these may already be provided by `module load`.
+  - bedtools>=2.31
+  - fastqc>=0.11.9
+  - multiqc>=1.28
+  - picard>=3.0
+  - rseqc>=5.0
+  - samtools>=1.19
+  - ucsc-gtftogenepred
+  - ucsc-genepredtobed
+
+  # Java runtime required by Picard/FastQC when not supplied by the HPC module.
+  - openjdk>=17
