@@ -129,6 +129,11 @@ The config is a Bash file. A minimal version looks like this:
 ```bash
 #!/bin/bash
 
+# Optional Slurm-cluster setup. Leave empty if the cluster is selected before
+# submitting the workflow.
+CLUSTER_MODULE="cluster/doduo"
+CLUSTER_ENV_MODULE="env/software/doduo"
+
 SAMPLESHEET="/path/to/samplesheet.tsv"
 FASTQ_DIR="/path/to/fastq"
 BAM_DIR="/path/to/bam"

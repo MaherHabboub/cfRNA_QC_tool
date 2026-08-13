@@ -4,6 +4,11 @@
 # Cohort A 10-sample QC config
 # ============================================================
 
+# Optional cluster setup for the submission host. Leave these empty when the
+# desired Slurm cluster has already been selected before submitting the workflow.
+CLUSTER_MODULE="cluster/doduo"
+CLUSTER_ENV_MODULE="env/software/doduo"
+
 # Input files/directories
 SAMPLESHEET="/scratch/gent/vo/000/gvo00027/projects/MHB/Cohort_A/QC_master/inputs/cohortA_10samples_samplesheet.tsv"
 FASTQ_DIR="/scratch/gent/vo/000/gvo00027/projects/MHB/Cohort_A/fastq"

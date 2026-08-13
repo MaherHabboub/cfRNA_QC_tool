@@ -14,12 +14,6 @@ if [[ ! -f "$CONFIG" ]]; then
     exit 1
 fi
 
-# -----------------------------
-# Select UGent HPC cluster
-# -----------------------------
-module swap cluster/doduo || true
-module load env/software/doduo || true
-
 # Convert config path to absolute path
 CONFIG="$(readlink -f "$CONFIG")"
 
@@ -34,6 +28,27 @@ source "$CONFIG"
 
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
+
+# -----------------------------
+# Optional HPC cluster setup
+# -----------------------------
+# Keep cluster selection in the user config so the workflow can be used on a
+# different Slurm cluster without editing this submission script. Leave both
+# variables empty when the cluster has already been selected externally.
+if [[ -n "${CLUSTER_MODULE:-}" || -n "${CLUSTER_ENV_MODULE:-}" ]]; then
+    if ! command -v module >/dev/null 2>&1; then
+        echo "ERROR: A cluster module was set in the config, but the 'module' command is unavailable." >&2
+        exit 1
+    fi
+
+    if [[ -n "${CLUSTER_MODULE:-}" ]]; then
+        module swap "$CLUSTER_MODULE"
+    fi
+
+    if [[ -n "${CLUSTER_ENV_MODULE:-}" ]]; then
+        module load "$CLUSTER_ENV_MODULE"
+    fi
+fi
 
 mkdir -p "${OUTDIR}/logs"
 
