@@ -23,18 +23,28 @@ source "$CONFIG"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 : "${EXON_BED:?ERROR: EXON_BED not set in config}"
 
+# -----------------------------
+# Paths
+# -----------------------------
+RESULT_DIR="${OUTDIR}/strandedness"
+
+# -----------------------------
+# Software environment
+# -----------------------------
 module purge
 module load RSeQC/5.0.1-foss-2023a
 
-RESULT_DIR="${OUTDIR}/strandedness"
+# -----------------------------
+# Validate prerequisites
+# -----------------------------
+if [[ ! -f "$EXON_BED" ]]; then
+    echo "ERROR: EXON_BED not found: $EXON_BED" >&2
+    exit 1
+fi
+
 mkdir -p "$RESULT_DIR"
 
 echo "Running strandedness QC..."
-
-if [[ ! -f "$EXON_BED" ]]; then
-    echo "ERROR: EXON_BED not found: $EXON_BED"
-    exit 1
-fi
 
 tail -n +2 "$SAMPLESHEET" | while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION
 do
@@ -58,8 +68,7 @@ do
       -i "$BAM" \
       > "$FULL_OUT"
 
-    # Same extraction logic as original:
-    # extract the "+-" line like the lab script does
+    # Extract the "+-" line used to summarize the inferred library orientation.
     out=$(grep "+-" "$FULL_OUT" | cut -d":" -f2 | tr -d ' ' || true)
 
     if [[ -z "$out" ]]; then

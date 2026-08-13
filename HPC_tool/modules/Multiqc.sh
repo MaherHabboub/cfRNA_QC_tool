@@ -36,6 +36,13 @@ CUSTOM_DIR="${MULTIQC_INPUT_DIR}/custom_tables"
 CUSTOM_MQC_DIR="${OUTDIR}/multiqc/custom_content"
 MULTIQC_TMP="${MULTIQC_DIR}/tmp"
 MULTIQC_CONFIG="${MULTIQC_DIR}/multiqc_config.yaml"
+REPORT="${MULTIQC_DIR}/hpc_qc_multiqc_report.html"
+
+# -----------------------------
+# Software environment
+# -----------------------------
+module purge
+module load MultiQC/1.28-foss-2024a
 
 mkdir -p "$MULTIQC_DIR" "$MULTIQC_INPUT_DIR" "$CUSTOM_DIR" "$CUSTOM_MQC_DIR" "$MULTIQC_TMP"
 
@@ -50,12 +57,6 @@ echo "MultiQC output folder: $MULTIQC_DIR"
 echo "MultiQC input folder: $MULTIQC_INPUT_DIR"
 echo "MultiQC temp folder: $TMPDIR"
 echo "Custom MultiQC content folder: $CUSTOM_MQC_DIR"
-
-# -----------------------------
-# Load MultiQC
-# -----------------------------
-module purge
-module load MultiQC/1.28-foss-2024a
 
 echo "Using MultiQC: $(command -v multiqc)"
 multiqc --version
@@ -144,10 +145,10 @@ do
 done
 
 # -----------------------------
-# Stage original custom QC summary tables
+# Stage source custom QC summary tables
 # -----------------------------
 # These are bundled beside the report but may not be parsed directly.
-echo "Staging original custom QC summary tables..."
+echo "Staging source custom QC summary tables..."
 
 find "$OUTDIR" -type f \( \
     -name "*.mapping_summary.tsv" -o \
@@ -183,8 +184,6 @@ done
 # Run MultiQC
 # -----------------------------
 echo "Running MultiQC scan..."
-
-REPORT="${MULTIQC_DIR}/hpc_qc_multiqc_report.html"
 
 set +e
 
@@ -222,7 +221,7 @@ echo "MultiQC complete."
 echo "Report:"
 echo "$REPORT"
 echo
-echo "Original custom TSVs staged in:"
+echo "Source custom TSVs staged in:"
 echo "$CUSTOM_DIR"
 echo
 echo "MultiQC custom content staged from:"

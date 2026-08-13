@@ -16,30 +16,36 @@ fi
 
 source "$CONFIG"
 
-# -----------------------------
-# Required config variables
-# -----------------------------
 : "${GTF:?ERROR: GTF is not set in config}"
 : "${OUTDIR:?ERROR: OUTDIR is not set in config}"
 
 # -----------------------------
-# Output paths
+# Paths
 # -----------------------------
 BIN_OUTDIR="${OUTDIR}/annotation/exon_intron_bins"
-mkdir -p "$BIN_OUTDIR"
-
 BINS_BED="${BIN_OUTDIR}/exon_intron_bins.bed"
 BINS_RAW="${BIN_OUTDIR}/exon_intron_bins.raw_transcript_level.bed"
+
+# -----------------------------
+# Software environment
+# -----------------------------
+module purge
+module load Anaconda3/2024.06-1
+
+# -----------------------------
+# Validate prerequisites
+# -----------------------------
+if [[ ! -f "$GTF" ]]; then
+    echo "ERROR: GTF not found: $GTF" >&2
+    exit 1
+fi
+
+mkdir -p "$BIN_OUTDIR"
 
 echo "Creating exon-intron boundary bins"
 echo "GTF: $GTF"
 echo "Raw transcript-level BED: $BINS_RAW"
 echo "Final deduplicated BED: $BINS_BED"
-
-[[ -f "$GTF" ]] || { echo "ERROR: GTF not found: $GTF"; exit 1; }
-
-module purge
-module load Anaconda3/2024.06-1
 
 python - "$GTF" "$BINS_RAW" "$BINS_BED" <<'PY'
 import re
@@ -171,8 +177,7 @@ with open(raw_bed, "w") as out:
 # -----------------------------
 # Deduplicate bins
 # -----------------------------
-# The original raw rows are transcript-level.
-# For QC, we deduplicate by genomic bin identity:
+# The raw rows are transcript-level. For QC, deduplicate by genomic bin identity:
 # chrom, start, end, bin_label, strand.
 #
 # This prevents genes with many transcript isoforms from producing many

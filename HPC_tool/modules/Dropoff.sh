@@ -23,13 +23,15 @@ source "$CONFIG"
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 
+# -----------------------------
+# Paths
+# -----------------------------
 BINS="${OUTDIR}/annotation/exon_intron_bins/exon_intron_bins.bed"
+RESULT_DIR="${OUTDIR}/dropoff"
 
-[[ -f "$BINS" ]] || {
-    echo "ERROR: Bin file not found: $BINS"
-    exit 1
-}
-
+# -----------------------------
+# Software environment
+# -----------------------------
 module purge
 module load BEDTools/2.31.1-GCC-13.2.0
 module load Anaconda3/2024.06-1
@@ -42,14 +44,20 @@ if ! command -v samtools >/dev/null 2>&1; then
     exit 1
 fi
 
-RESULT_DIR="${OUTDIR}/dropoff"
+# -----------------------------
+# Validate prerequisites
+# -----------------------------
+if [[ ! -f "$BINS" ]]; then
+    echo "ERROR: Exon-intron bin file not found: $BINS" >&2
+    exit 1
+fi
+
 mkdir -p "$RESULT_DIR"
 
 echo "Running exon-intron dropoff QC"
 echo "Target sample: $TARGET_SAMPLE"
 echo "Bins file: $BINS"
 
-# Skip header, read samplesheet
 tail -n +2 "$SAMPLESHEET" | while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION
 do
 

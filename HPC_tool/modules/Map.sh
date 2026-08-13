@@ -22,12 +22,16 @@ source "$CONFIG"
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 
+# -----------------------------
+# Paths
+# -----------------------------
 RESULT_DIR="${OUTDIR}/mapping"
 mkdir -p "$RESULT_DIR"
 
+# No additional HPC environment modules are required.
+
 echo "Running mapping QC..."
 
-# Same parsing helper as original
 get_val() {
   local logfile="$1"
   local key="$2"
@@ -65,10 +69,8 @@ do
 
     LOCAL_LOG="${SAMPLE_OUTDIR}/${SAMPLE}.Log.final.out"
 
-    # Same copy behavior
     cp -f "$STARLOG" "$LOCAL_LOG"
 
-    # Same metrics extraction
     input_reads="$(get_val "$STARLOG" 'Number of input reads')"
 
     uniq_n="$(get_val "$STARLOG" 'Uniquely mapped reads number')"
@@ -85,7 +87,6 @@ do
 
     unmap_other_pct="$(get_val "$STARLOG" '% of reads unmapped: other')"
 
-    # Same mapped % calculation
     mapped_pct="$(python3 - <<PY
 def p(x):
     return float(x.replace("%","").strip()) if x else 0.0
@@ -98,7 +99,6 @@ print(f"{u+m+t:.2f}%")
 PY
 )"
 
-    # Same unmapped % calculation
     unmapped_pct="$(python3 - <<PY
 def p(x):
     return float(x.replace("%","").strip()) if x else 0.0

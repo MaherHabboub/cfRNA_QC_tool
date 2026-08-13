@@ -22,8 +22,13 @@ source "$CONFIG"
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 
+# -----------------------------
+# Paths
+# -----------------------------
 RESULT_DIR="${OUTDIR}/splice_junctions"
 mkdir -p "$RESULT_DIR"
+
+# No additional HPC environment modules are required.
 
 echo "Running splice junction QC..."
 
@@ -50,7 +55,6 @@ do
         echo "WARNING: STAR Log.final.out not found for $SAMPLE, continuing without copying"
     fi
 
-    # Same splice junction summarization logic as original
     awk -v sample="$SAMPLE" 'BEGIN{
       total=0; annotated=0; novel=0; uniq=0; multi=0;
     }

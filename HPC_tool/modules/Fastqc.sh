@@ -22,10 +22,17 @@ source "$CONFIG"
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 
+# -----------------------------
+# Paths
+# -----------------------------
+RESULT_DIR="${OUTDIR}/fastqc/raw"
+
+# -----------------------------
+# Software environment
+# -----------------------------
 module purge
 module load FastQC/0.11.9-Java-11
 
-RESULT_DIR="${OUTDIR}/fastqc/raw"
 mkdir -p "$RESULT_DIR"
 
 echo "Running FastQC..."

@@ -22,8 +22,21 @@ source "$CONFIG"
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 
+# -----------------------------
+# Paths
+# -----------------------------
 BED12_PATH_FILE="${OUTDIR}/annotation/BED12.path.txt"
+RESULT_DIR="${OUTDIR}/read_distribution"
 
+# -----------------------------
+# Software environment
+# -----------------------------
+module purge
+module load RSeQC/5.0.1-foss-2023a
+
+# -----------------------------
+# Validate prerequisites
+# -----------------------------
 if [[ ! -s "$BED12_PATH_FILE" ]]; then
     echo "ERROR: Generated BED12 path file is missing or empty: $BED12_PATH_FILE" >&2
     echo "Run GTF_to_BED12.sh successfully before this module." >&2
@@ -38,10 +51,6 @@ if [[ -z "$BED12" || ! -f "$BED12" ]]; then
     exit 1
 fi
 
-module purge
-module load RSeQC/5.0.1-foss-2023a
-
-RESULT_DIR="${OUTDIR}/read_distribution"
 mkdir -p "$RESULT_DIR"
 
 echo "Running read distribution QC..."

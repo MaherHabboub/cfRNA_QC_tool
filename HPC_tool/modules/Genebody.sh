@@ -23,8 +23,22 @@ source "$CONFIG"
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 
+# -----------------------------
+# Paths
+# -----------------------------
 BED12_PATH_FILE="${OUTDIR}/annotation/BED12.path.txt"
+RESULT_DIR="${OUTDIR}/gene_body_coverage"
 
+# -----------------------------
+# Software environment
+# -----------------------------
+module purge
+module load picard/3.0.0-Java-17
+module load RSeQC/5.0.1-foss-2023a
+
+# -----------------------------
+# Validate prerequisites
+# -----------------------------
 if [[ ! -s "$BED12_PATH_FILE" ]]; then
     echo "ERROR: Generated BED12 path file is missing or empty: $BED12_PATH_FILE" >&2
     echo "Run GTF_to_BED12.sh successfully before this module." >&2
@@ -39,11 +53,6 @@ if [[ -z "$BED12" || ! -f "$BED12" ]]; then
     exit 1
 fi
 
-module purge
-module load picard/3.0.0-Java-17
-module load RSeQC/5.0.1-foss-2023a
-
-RESULT_DIR="${OUTDIR}/gene_body_coverage"
 mkdir -p "$RESULT_DIR"
 
 echo "Running gene body coverage QC..."
@@ -69,17 +78,14 @@ do
 
     echo "[1/2] Building BAM index..."
 
-    # Same logic as original
     java -jar "$EBROOTPICARD/picard.jar" BuildBamIndex \
       I="$BAM" \
       O="${BAM}.bai"
 
-    # Same check as original
     test -f "${BAM}.bai"
 
     echo "[2/2] Running RSeQC geneBody_coverage..."
 
-    # Same tolerant behavior as original
     set +e
 
     geneBody_coverage.py \
@@ -91,7 +97,6 @@ do
 
     set -e
 
-    # Same logic as original
     if [[ $rc -ne 0 && ! -f "${PREFIX}.geneBodyCoverage.txt" ]]; then
         echo "WARNING: geneBody_coverage failed for $SAMPLE"
         continue

@@ -16,19 +16,27 @@ fi
 
 source "$CONFIG"
 
+# -----------------------------
+# Required config variables
+# -----------------------------
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 
+# -----------------------------
+# Paths
+# -----------------------------
 CUSTOM_MQC_DIR="${OUTDIR}/multiqc/custom_content"
-mkdir -p "$CUSTOM_MQC_DIR"
 
-# Clear old custom content so removed sections do not keep showing up
+# -----------------------------
+# Software environment
+# -----------------------------
+module purge
+module load Anaconda3/2024.06-1
+
+mkdir -p "$CUSTOM_MQC_DIR"
 find "$CUSTOM_MQC_DIR" -type f -delete 2>/dev/null || true
 
 echo "Creating MultiQC custom content..."
 echo "Custom content folder: $CUSTOM_MQC_DIR"
-
-module purge
-module load Anaconda3/2024.06-1
 
 python - "$OUTDIR" "$CUSTOM_MQC_DIR" <<'PY'
 import sys

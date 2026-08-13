@@ -16,15 +16,25 @@ fi
 
 source "$CONFIG"
 
+# -----------------------------
+# Required config variables
+# -----------------------------
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 
+# -----------------------------
+# Paths
+# -----------------------------
+RESULT_DIR="${OUTDIR}/fragment_size"
+
+# -----------------------------
+# Software environment
+# -----------------------------
 module purge
 module load picard/3.0.0-Java-17
 module load BEDTools/2.31.1-GCC-13.2.0
 module load Anaconda3/2024.06-1
 
-RESULT_DIR="${OUTDIR}/fragment_size"
 mkdir -p "$RESULT_DIR"
 
 echo "Running fragment size QC..."
@@ -56,7 +66,6 @@ do
 
     echo "[1/3] Queryname sort..."
 
-    # Same logic as original
     java -jar "$EBROOTPICARD/picard.jar" SortSam \
       I="$BAM" \
       O="$QBAM" \
@@ -65,7 +74,6 @@ do
 
     echo "[2/3] BEDPE fragment extraction..."
 
-    # Same logic as original
     bedtools bamtobed -bedpe -i "$QBAM" \
       | awk 'BEGIN{OFS="\t"}
              $1==$4 {
@@ -94,7 +102,6 @@ histo = sys.argv[2]
 summary_out = sys.argv[3]
 plot_out = sys.argv[4]
 
-# Same logic as original
 df = pd.read_csv(
     histo,
     sep="\t",

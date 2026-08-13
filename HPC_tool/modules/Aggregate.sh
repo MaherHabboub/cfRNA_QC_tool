@@ -16,26 +16,34 @@ fi
 
 source "$CONFIG"
 
+# -----------------------------
+# Required config variables
+# -----------------------------
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 
+# -----------------------------
+# Paths
+# -----------------------------
 SUMMARY_DIR="${OUTDIR}/summary"
-mkdir -p "$SUMMARY_DIR"
-
 SUMMARY_TSV="${SUMMARY_DIR}/hpc_qc_summary.tsv"
 ZIP_OUT="${SUMMARY_DIR}/hpc_qc_transfer_bundle.zip"
-
 MULTIQC_REPORT="${OUTDIR}/multiqc/hpc_qc_multiqc_report.html"
 MULTIQC_DATA_DIR="${OUTDIR}/multiqc/hpc_qc_multiqc_report_data"
+
+# -----------------------------
+# Software environment
+# -----------------------------
+module purge
+module load Anaconda3/2024.06-1
+
+mkdir -p "$SUMMARY_DIR"
 
 echo "Aggregating HPC QC outputs"
 echo "SAMPLESHEET: $SAMPLESHEET"
 echo "OUTDIR: $OUTDIR"
 echo "SUMMARY_TSV: $SUMMARY_TSV"
 echo "ZIP_OUT: $ZIP_OUT"
-
-module purge
-module load Anaconda3/2024.06-1
 
 python - "$SAMPLESHEET" "$OUTDIR" "$SUMMARY_TSV" "$ZIP_OUT" "$MULTIQC_REPORT" "$MULTIQC_DATA_DIR" <<'PY'
 import sys

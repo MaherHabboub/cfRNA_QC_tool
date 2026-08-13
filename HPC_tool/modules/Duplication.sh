@@ -22,15 +22,21 @@ source "$CONFIG"
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 
+# -----------------------------
+# Paths
+# -----------------------------
+RESULT_DIR="${OUTDIR}/duplication"
+
+# -----------------------------
+# Software environment
+# -----------------------------
 module purge
 module load picard/3.0.0-Java-17
 
-RESULT_DIR="${OUTDIR}/duplication"
 mkdir -p "$RESULT_DIR"
 
 echo "Running duplication QC..."
 
-# Skip header
 tail -n +2 "$SAMPLESHEET" | while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION
 do
 
@@ -51,7 +57,6 @@ do
 
     echo "Running Picard MarkDuplicates..."
 
-    # Same logic as original
     java -jar "$EBROOTPICARD/picard.jar" MarkDuplicates \
       I="$BAM" \
       O="$TMP_BAM" \
@@ -61,10 +66,8 @@ do
       REMOVE_DUPLICATES=false \
       CREATE_INDEX=false
 
-    # Same cleanup logic
     rm -f "$TMP_BAM"
 
-    # Same metric extraction logic
     PCT=$(awk '
         BEGIN{FS="\t"}
         $1=="LIBRARY"{hdr=1; next}

@@ -22,31 +22,39 @@ source "$CONFIG"
 : "${GTF:?ERROR: GTF not set in config}"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 
-module purge
-module load Kent_tools/479-GCC-13.3.0
-
+# -----------------------------
+# Paths
+# -----------------------------
 ANNOT_DIR="${OUTDIR}/annotation"
-mkdir -p "$ANNOT_DIR"
-
-# Use GTF filename as prefix, minus .gtf/.gff
 BASENAME="$(basename "$GTF")"
 PREFIX="${BASENAME%.gtf}"
 PREFIX="${PREFIX%.gff}"
-
 GENEPRED="${ANNOT_DIR}/${PREFIX}.genePred"
 BED12_UNSORTED="${ANNOT_DIR}/${PREFIX}.bed12.unsorted.bed"
 BED12="${ANNOT_DIR}/${PREFIX}.bed12.bed"
+BED12_PATH_FILE="${ANNOT_DIR}/BED12.path.txt"
+
+# -----------------------------
+# Software environment
+# -----------------------------
+module purge
+module load Kent_tools/479-GCC-13.3.0
+
+# -----------------------------
+# Validate prerequisites
+# -----------------------------
+if [[ ! -f "$GTF" ]]; then
+    echo "ERROR: GTF not found: $GTF" >&2
+    exit 1
+fi
+
+mkdir -p "$ANNOT_DIR"
 
 echo "Using gtfToGenePred: $(command -v gtfToGenePred)"
 echo "Using genePredToBed: $(command -v genePredToBed)"
 echo "Input GTF: $GTF"
 echo "Output BED12: $BED12"
 echo
-
-[[ -f "$GTF" ]] || {
-    echo "ERROR: GTF not found: $GTF"
-    exit 1
-}
 
 # Convert GTF -> genePred (keeps CDS info)
 gtfToGenePred -genePredExt -allErrors "$GTF" "$GENEPRED"
@@ -70,10 +78,9 @@ if [[ -n "${BAD_LINE}" ]]; then
   exit 2
 fi
 
-# Write BED12 path to a small helper file for the master script / user
-echo "$BED12" > "${ANNOT_DIR}/BED12.path.txt"
+echo "$BED12" > "$BED12_PATH_FILE"
 
 echo
 echo "Done."
 echo "Created: $BED12"
-echo "Path saved to: ${ANNOT_DIR}/BED12.path.txt"
+echo "Path saved to: $BED12_PATH_FILE"

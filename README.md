@@ -26,7 +26,7 @@ cfRNA_QC_tool/
 │   │   ├── cohortA_10samples_config.sh
 │   │   └── cohortA_10samples_samplesheet.tsv
 │   ├── modules/
-│   └── wrappers/
+│   └── wrappers/                 # generated at submission time
 ├── Local_tool/
 │   ├── requirements.yml
 │   ├── resources/
@@ -169,11 +169,16 @@ From the repository root or from inside `HPC_tool/`:
 bash HPC_tool/submit_HPC_QC.sh HPC_tool/config/cohortA_10samples_config.sh
 ```
 
-The script writes generated Slurm wrappers to:
+The script generates a fresh Slurm wrapper for every submitted job and writes
+them to:
 
 ```text
 HPC_tool/wrappers/
 ```
+
+Wrappers contain the absolute tool and config paths calculated at submission
+time. They are generated run artifacts, are intentionally not tracked in Git,
+and should not be manually reused after moving the repository or config.
 
 It writes submission logs to:
 
