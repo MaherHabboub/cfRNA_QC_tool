@@ -109,12 +109,38 @@ The HPC workflow includes:
 - MultiQC report generation.
 - Final aggregation of QC metrics.
 
-Some modules are submitted once for the full cohort. Slower or more
-memory-intensive modules, including gene body coverage and exon-intron drop-off,
-are submitted as one job per sample. Annotation setup runs first, QC modules run
-afterward, and reporting/aggregation runs at the end. The final MultiQC and
-aggregation steps use `afterany` dependencies so that summary reports can still
-be generated even if one QC module fails.
+Annotation setup, mapping-statistics parsing, and splice-junction summarization
+run once for the full cohort. FastQC, duplication, fragmentation, gene body
+coverage, read distribution, strandedness, and exon-intron drop-off run as one
+job per sample. Annotation setup runs first, QC modules run afterward, and
+reporting/aggregation runs at the end. The final MultiQC and aggregation steps
+use `afterany` dependencies so that summary reports can still be generated even
+if one QC module fails.
+
+### HPC Module Reference
+
+Every module receives the config file as its first argument. Modules that work
+per sample read the required FASTQ, BAM, STAR-log, or splice-junction path from
+the corresponding row in `SAMPLESHEET`; their outputs are written below
+`OUTDIR`. The submitter supplies a sample ID for per-sample jobs, but each of
+those modules can also be run manually without a sample ID to process all rows.
+
+| Module | Required file inputs | Main outputs | Function |
+|---|---|---|---|
+| `GTF_to_BED12.sh` | Config `GTF` | `annotation/<gtf-prefix>.genePred`, `.bed12.bed`, and `annotation/BED12.path.txt` | Converts the reference GTF to validated BED12 annotation for RSeQC. The path-record file tells downstream modules the exact BED12 filename generated. |
+| `Make_Dropoff_Bins.sh` | Config `GTF` | `annotation/exon_intron_bins/exon_intron_bins.bed` and the raw transcript-level bin BED | Builds deduplicated 50 bp exon- and intron-side bins around exon–intron boundaries for drop-off QC. |
+| `Fastqc.sh` | Samplesheet `fastq_r1`; also `fastq_r2` for `PE` samples | `fastqc/raw/<sample>/` FastQC HTML/ZIP reports and `<sample>.fastqc_parsed_metrics.tsv` | Runs FastQC and extracts last-10-base quality, minimum positional quality, GC peak, and maximum adapter content. |
+| `Map.sh` | Samplesheet `star_log` | `mapping/<sample>/<sample>.Log.final.out` and `.mapping_summary.tsv` | Copies the STAR final log and extracts mapping, multimapping, and unmapped-read metrics. |
+| `Duplication.sh` | Samplesheet `bam` | `duplication/<sample>/<sample>.markdup.metrics.txt` and `.duplication_summary.tsv` | Runs Picard MarkDuplicates and records the alignment-based duplicate fraction. |
+| `Fragmentation.sh` | Samplesheet `bam` for `PE` samples | `fragment_size/<sample>/` insert-size histogram TSV, summary TSV, and histogram PNG | Derives paired-end fragment lengths and summarizes cfRNA-relevant size windows and 167 bp peak enrichment. |
+| `Genebody.sh` | Samplesheet `bam`; generated `annotation/BED12.path.txt` and referenced BED12 | `gene_body_coverage/<sample>.geneBodyCoverage.txt` and RSeQC companion outputs | Builds a BAM index and runs RSeQC gene-body coverage to assess 5′–3′ coverage bias. |
+| `Read_Distribution.sh` | Samplesheet `bam`; generated `annotation/BED12.path.txt` and referenced BED12 | `read_distribution/<sample>/<sample>.read_distribution.txt` | Runs RSeQC feature distribution to quantify reads in CDS exons, UTR exons, introns, and intergenic regions. |
+| `Splice_Junction.sh` | Samplesheet `sj_tab`; optional `star_log` | `splice_junctions/<sample>/<sample>.splice_junction_summary.tsv`; copied STAR log when available | Summarizes STAR splice junctions, including annotated versus novel junction fractions and read support. |
+| `Strandedness.sh` | Samplesheet `bam`; config `EXON_BED` | `strandedness/<sample>/<sample>_RSeQC_output_all.txt` and `_RSeQC_output.txt` | Runs RSeQC library-orientation inference and writes a compact strandedness result. |
+| `Dropoff.sh` | Samplesheet `bam`; generated `annotation/exon_intron_bins/exon_intron_bins.bed` | `dropoff/<sample>/` bin-coverage TSV, normalized drop-off profile TSV, and PNG | Counts split-read coverage across exon–intron boundary bins and visualizes normalized exon-to-intron drop-off. |
+| `Make_multiqc_custom_content.sh` | Existing QC TSV/PNG outputs under `OUTDIR` | `multiqc/custom_content/` MultiQC YAML tables, compact drop-off TSV, and combined PNGs | Converts pipeline-specific metrics and plots into MultiQC custom-content files. It is called automatically by `Multiqc.sh`. |
+| `Multiqc.sh` | Existing QC outputs under `OUTDIR`; `Make_multiqc_custom_content.sh` | `multiqc/hpc_qc_multiqc_report.html`, report-data directory, staged input, and config files | Stages standard and custom outputs, then generates the combined MultiQC report. |
+| `Aggregate.sh` | `SAMPLESHEET`; existing mapping, FastQC, duplication, fragmentation, read-distribution, and splice-junction outputs; optional MultiQC report | `summary/hpc_qc_summary.tsv` and `summary/hpc_qc_transfer_bundle.zip` | Combines selected sample-level QC metrics into one TSV and packages it with the MultiQC report/data for transfer. |
 
 ### Example HPC Config
 
@@ -133,6 +159,9 @@ The config is a Bash file. A minimal version looks like this:
 # submitting the workflow.
 CLUSTER_MODULE="cluster/doduo"
 CLUSTER_ENV_MODULE="env/software/doduo"
+
+# Threads used by FastQC in each per-sample job.
+FASTQC_THREADS=2
 
 SAMPLESHEET="/path/to/samplesheet.tsv"
 

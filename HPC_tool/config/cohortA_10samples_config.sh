@@ -9,6 +9,9 @@
 CLUSTER_MODULE="cluster/doduo"
 CLUSTER_ENV_MODULE="env/software/doduo"
 
+# FastQC uses this many threads per sample job.
+FASTQC_THREADS=2
+
 # Input manifest
 SAMPLESHEET="/scratch/gent/vo/000/gvo00027/projects/MHB/Cohort_A/QC_master/inputs/cohortA_10samples_samplesheet.tsv"
 

@@ -3,9 +3,10 @@
 set -euo pipefail
 
 CONFIG="${1:-}"
+TARGET_SAMPLE="${2:-ALL}"
 
 if [[ -z "$CONFIG" ]]; then
-    echo "Usage: bash QC_fastqc.sh path/to/config.sh"
+    echo "Usage: bash Fastqc.sh path/to/config.sh [sample_id]"
     exit 1
 fi
 
@@ -21,6 +22,7 @@ source "$CONFIG"
 # -----------------------------
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
+FASTQC_THREADS="${FASTQC_THREADS:-2}"
 
 # -----------------------------
 # Paths
@@ -36,6 +38,7 @@ module load FastQC/0.11.9-Java-11
 mkdir -p "$RESULT_DIR"
 
 echo "Running FastQC..."
+echo "Target sample: $TARGET_SAMPLE"
 
 # -----------------------------
 # Helper functions
@@ -137,6 +140,10 @@ parse_fastqc_stream() {
 # -----------------------------
 tail -n +2 "$SAMPLESHEET" | while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION
 do
+    if [[ "$TARGET_SAMPLE" != "ALL" && "$SAMPLE" != "$TARGET_SAMPLE" ]]; then
+        continue
+    fi
+
     echo "------------------------------------"
     echo "Processing: $SAMPLE"
     echo "Layout: $LAYOUT"
@@ -169,14 +176,14 @@ do
         fi
 
         fastqc \
-          -t "${THREADS:-4}" \
+          -t "$FASTQC_THREADS" \
           -o "$SAMPLE_OUTDIR" \
           "$FASTQ1" "$FASTQ2"
 
     elif [[ "$LAYOUT" == "SE" ]]; then
 
         fastqc \
-          -t "${THREADS:-4}" \
+          -t "$FASTQC_THREADS" \
           -o "$SAMPLE_OUTDIR" \
           "$FASTQ1"
 

@@ -28,6 +28,12 @@ source "$CONFIG"
 
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
+FASTQC_THREADS="${FASTQC_THREADS:-2}"
+
+if [[ ! "$FASTQC_THREADS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: FASTQC_THREADS must be a positive integer: $FASTQC_THREADS" >&2
+    exit 1
+fi
 
 # -----------------------------
 # Optional HPC cluster setup
@@ -173,23 +179,10 @@ submit_step \
 
 # ============================================================
 # 2. QC module jobs
-# These run as separate jobs after annotation setup.
+# Mapping and splice-junction summaries run once for the full cohort.
 # ============================================================
 
 qc_jobs=()
-
-fastqc_job=$(
-submit_step \
-    "03" \
-    "fastqc" \
-    "Fastqc.sh" \
-    "02:00:00" \
-    "16G" \
-    "4" \
-    "afterok" \
-    "$bins_job"
-)
-qc_jobs+=("$fastqc_job")
 
 map_job=$(
 submit_step \
@@ -204,73 +197,6 @@ submit_step \
 )
 qc_jobs+=("$map_job")
 
-dup_job=$(
-submit_step \
-    "05" \
-    "duplication" \
-    "Duplication.sh" \
-    "12:00:00" \
-    "60G" \
-    "2" \
-    "afterok" \
-    "$bins_job"
-)
-qc_jobs+=("$dup_job")
-
-frag_job=$(
-submit_step \
-    "06" \
-    "fragmentation" \
-    "Fragmentation.sh" \
-    "12:00:00" \
-    "30G" \
-    "2" \
-    "afterok" \
-    "$bins_job"
-)
-qc_jobs+=("$frag_job")
-
-# ============================================================
-# 2b. Gene body coverage
-# One job per sample, because this module can be slow.
-# ============================================================
-
-echo "Submitting one Genebody job per sample..." >&2
-
-while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION
-do
-    [[ -z "${SAMPLE:-}" ]] && continue
-
-    genebody_job=$(
-    submit_step \
-        "07" \
-        "genebody_${SAMPLE}" \
-        "Genebody.sh" \
-        "24:00:00" \
-        "20G" \
-        "2" \
-        "afterok" \
-        "$bins_job" \
-        "$SAMPLE"
-    )
-
-    qc_jobs+=("$genebody_job")
-
-done < <(tail -n +2 "$SAMPLESHEET")
-
-read_dist_job=$(
-submit_step \
-    "08" \
-    "read_distribution" \
-    "Read_Distribution.sh" \
-    "02:00:00" \
-    "16G" \
-    "2" \
-    "afterok" \
-    "$bins_job"
-)
-qc_jobs+=("$read_dist_job")
-
 splice_job=$(
 submit_step \
     "09" \
@@ -284,18 +210,102 @@ submit_step \
 )
 qc_jobs+=("$splice_job")
 
-strand_job=$(
-submit_step \
-    "10" \
-    "strandedness" \
-    "Strandedness.sh" \
-    "02:00:00" \
-    "16G" \
-    "2" \
-    "afterok" \
-    "$bins_job"
-)
-qc_jobs+=("$strand_job")
+# ============================================================
+# 2b. Per-sample QC module jobs
+# ============================================================
+
+echo "Submitting per-sample QC jobs..." >&2
+
+while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION
+do
+    [[ -z "${SAMPLE:-}" ]] && continue
+
+    fastqc_job=$(
+    submit_step \
+        "03" \
+        "fastqc_${SAMPLE}" \
+        "Fastqc.sh" \
+        "01:00:00" \
+        "3G" \
+        "$FASTQC_THREADS" \
+        "afterok" \
+        "$bins_job" \
+        "$SAMPLE"
+    )
+    qc_jobs+=("$fastqc_job")
+
+    dup_job=$(
+    submit_step \
+        "05" \
+        "duplication_${SAMPLE}" \
+        "Duplication.sh" \
+        "2:00:00" \
+        "40G" \
+        "2" \
+        "afterok" \
+        "$bins_job" \
+        "$SAMPLE"
+    )
+    qc_jobs+=("$dup_job")
+
+    frag_job=$(
+    submit_step \
+        "06" \
+        "fragmentation_${SAMPLE}" \
+        "Fragmentation.sh" \
+        "2:00:00" \
+        "20G" \
+        "2" \
+        "afterok" \
+        "$bins_job" \
+        "$SAMPLE"
+    )
+    qc_jobs+=("$frag_job")
+
+    genebody_job=$(
+    submit_step \
+        "07" \
+        "genebody_${SAMPLE}" \
+        "Genebody.sh" \
+        "6:00:00" \
+        "8G" \
+        "2" \
+        "afterok" \
+        "$bins_job" \
+        "$SAMPLE"
+    )
+
+    qc_jobs+=("$genebody_job")
+
+    read_dist_job=$(
+    submit_step \
+        "08" \
+        "read_distribution_${SAMPLE}" \
+        "Read_Distribution.sh" \
+        "02:00:00" \
+        "8G" \
+        "1" \
+        "afterok" \
+        "$bins_job" \
+        "$SAMPLE"
+    )
+    qc_jobs+=("$read_dist_job")
+
+    strand_job=$(
+    submit_step \
+        "10" \
+        "strandedness_${SAMPLE}" \
+        "Strandedness.sh" \
+        "02:00:00" \
+        "4G" \
+        "1" \
+        "afterok" \
+        "$bins_job" \
+        "$SAMPLE"
+    )
+    qc_jobs+=("$strand_job")
+
+done < <(tail -n +2 "$SAMPLESHEET")
 
 # ============================================================
 # 2c. Exon-intron dropoff
@@ -313,8 +323,8 @@ do
         "11" \
         "dropoff_${SAMPLE}" \
         "Dropoff.sh" \
-        "12:00:00" \
-        "80G" \
+        "3:00:00" \
+        "6G" \
         "2" \
         "afterok" \
         "$bins_job" \

@@ -3,9 +3,10 @@
 set -euo pipefail
 
 CONFIG="${1:-}"
+TARGET_SAMPLE="${2:-ALL}"
 
 if [[ -z "$CONFIG" ]]; then
-    echo "Usage: bash 03_duplication_qc.sh path/to/config.sh"
+    echo "Usage: bash Duplication.sh path/to/config.sh [sample_id]"
     exit 1
 fi
 
@@ -36,9 +37,14 @@ module load picard/3.0.0-Java-17
 mkdir -p "$RESULT_DIR"
 
 echo "Running duplication QC..."
+echo "Target sample: $TARGET_SAMPLE"
 
 tail -n +2 "$SAMPLESHEET" | while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION
 do
+    if [[ "$TARGET_SAMPLE" != "ALL" && "$SAMPLE" != "$TARGET_SAMPLE" ]]; then
+        continue
+    fi
+
 
     echo "------------------------------------"
     echo "Processing: $SAMPLE"
