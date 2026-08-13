@@ -142,8 +142,11 @@ GTF="/path/to/reference.gtf"
 EXON_BED="/path/to/exons_sorted_merged.bed"
 
 OUTDIR="/path/to/qc_output"
-BED12="${OUTDIR}/annotation/reference.bed12.bed"
 ```
+
+The workflow generates the BED12 annotation from `GTF` during its first step.
+Downstream modules read the generated path automatically, so `BED12` must not
+be set in the config.
 
 Use absolute paths where possible, especially on HPC systems.
 

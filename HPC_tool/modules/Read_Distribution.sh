@@ -21,7 +21,22 @@ source "$CONFIG"
 # -----------------------------
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
-: "${BED12:?ERROR: BED12 not set in config}"
+
+BED12_PATH_FILE="${OUTDIR}/annotation/BED12.path.txt"
+
+if [[ ! -s "$BED12_PATH_FILE" ]]; then
+    echo "ERROR: Generated BED12 path file is missing or empty: $BED12_PATH_FILE" >&2
+    echo "Run GTF_to_BED12.sh successfully before this module." >&2
+    exit 1
+fi
+
+BED12="$(<"$BED12_PATH_FILE")"
+
+if [[ -z "$BED12" || ! -f "$BED12" ]]; then
+    echo "ERROR: Generated BED12 file is missing: ${BED12:-<empty path>}" >&2
+    echo "Path was read from: $BED12_PATH_FILE" >&2
+    exit 1
+fi
 
 module purge
 module load RSeQC/5.0.1-foss-2023a
@@ -30,6 +45,7 @@ RESULT_DIR="${OUTDIR}/read_distribution"
 mkdir -p "$RESULT_DIR"
 
 echo "Running read distribution QC..."
+echo "Generated BED12: $BED12"
 
 tail -n +2 "$SAMPLESHEET" | while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION
 do
@@ -40,11 +56,6 @@ do
     if [[ ! -f "$BAM" ]]; then
         echo "WARNING: BAM not found for $SAMPLE, skipping"
         continue
-    fi
-
-    if [[ ! -f "$BED12" ]]; then
-        echo "ERROR: BED12 not found: $BED12"
-        exit 1
     fi
 
     SAMPLE_OUTDIR="${RESULT_DIR}/${SAMPLE}"
