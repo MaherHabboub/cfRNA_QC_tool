@@ -135,8 +135,6 @@ CLUSTER_MODULE="cluster/doduo"
 CLUSTER_ENV_MODULE="env/software/doduo"
 
 SAMPLESHEET="/path/to/samplesheet.tsv"
-FASTQ_DIR="/path/to/fastq"
-BAM_DIR="/path/to/bam"
 
 GTF="/path/to/reference.gtf"
 EXON_BED="/path/to/exons_sorted_merged.bed"
