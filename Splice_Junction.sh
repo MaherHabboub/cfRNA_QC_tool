@@ -1,40 +1,34 @@
 #!/bin/bash
 
+#SBATCH --job-name=splice_junction_conditions
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=4G
+#SBATCH --time=04:00:00
+#SBATCH --output=splice_junction_conditions_%j.out
+#SBATCH --error=splice_junction_conditions_%j.err
+
 set -euo pipefail
 
-CONFIG="${1:-}"
-
-if [[ -z "$CONFIG" ]]; then
-    echo "Usage: bash Splice_Junction.sh path/to/config.sh"
-    exit 1
-fi
-
-if [[ ! -f "$CONFIG" ]]; then
-    echo "ERROR: Config file not found: $CONFIG"
-    exit 1
-fi
-
-source "$CONFIG"
-
-# -----------------------------
-# Required config variables
-# -----------------------------
-: "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
-: "${OUTDIR:?ERROR: OUTDIR not set in config}"
-
-# -----------------------------
-# Paths
-# -----------------------------
+# ============================================================
+# Standalone CohortA analysis grouped by the condition in the final
+# samplesheet column. Another samplesheet can be supplied as the first
+# sbatch argument if needed.
+# ============================================================
+PROJECT_DIR="/scratch/gent/vo/000/gvo00027/projects/MHB/Cohort_A"
+DEFAULT_SAMPLESHEET="${PROJECT_DIR}/QC_master/inputs/cohortA_10samples_samplesheet.tsv"
+SAMPLESHEET="${1:-$DEFAULT_SAMPLESHEET}"
+OUTDIR="${PROJECT_DIR}/Splice_junction_testing"
 MAPQ_MIN=30
+
 RESULT_DIR="${OUTDIR}/splice_junctions"
+# Keep the established output paths so a rerun replaces the earlier
+# two-category outputs instead of leaving an obsolete plot beside the new one.
 COMBINED_TSV="${RESULT_DIR}/splice_read_fractions.tsv"
 CONDITION_SUMMARY_TSV="${RESULT_DIR}/splice_read_fraction_cohort_summary.tsv"
 PLOT_PNG="${RESULT_DIR}/splice_read_fractions.png"
 PLOT_PDF="${RESULT_DIR}/splice_read_fractions.pdf"
 
-# -----------------------------
-# Software environment
-# -----------------------------
+# Only load software actually used by this job.
 module purge
 module load SAMtools
 module load Anaconda3/2024.06-1
@@ -46,22 +40,29 @@ for cmd in samtools python; do
     }
 done
 
+[[ -f "$SAMPLESHEET" ]] || {
+    echo "ERROR: Sample sheet not found: $SAMPLESHEET" >&2
+    exit 1
+}
+
 mkdir -p "$RESULT_DIR"
 TMP_TSV="${COMBINED_TSV}.tmp.$$"
 trap 'rm -f "$TMP_TSV"' EXIT
 
-HEADER='sample\tcondition\ttotal_unique_mapped_reads\tspliced_reads\tfraction_spliced\tmapq_min'
+HEADER='sample\tcondition\ttotal_unique_mapped_reads\tnonsplice_reads\tfraction_nonsplice\tmapq_min'
 printf '%b\n' "$HEADER" > "$TMP_TSV"
 
-echo "Running splice junction QC..."
+echo "============================================================"
+echo "Standalone condition-grouped splice-junction QC"
 echo "Sample sheet: $SAMPLESHEET"
-echo "Output: $RESULT_DIR"
-echo "MAPQ cutoff: $MAPQ_MIN"
+echo "Output:       $RESULT_DIR"
+echo "MAPQ cutoff:  $MAPQ_MIN"
+echo "============================================================"
 
 N_SAMPLES=0
 
-# Expected samplesheet positions: sample ID (1), BAM (4), STAR log (5),
-# SJ.out.tab (6), and condition (final column).
+# Required positions: SAMPLE in column 1, BAM in column 4, STARLOG in
+# column 5, SJTAB in column 6, and CONDITION in the final column.
 while IFS= read -r SAMPLE_LINE; do
     IFS=$'\t' read -r -a FIELDS <<< "$SAMPLE_LINE"
 
@@ -90,15 +91,17 @@ while IFS= read -r SAMPLE_LINE; do
         exit 1
     fi
 
-    SAMPLE_OUTDIR="${RESULT_DIR}/${SAMPLE}"
-    mkdir -p "$SAMPLE_OUTDIR"
+    SAMPLE_DIR="${RESULT_DIR}/${SAMPLE}"
+    mkdir -p "$SAMPLE_DIR"
 
-    echo "------------------------------------"
+    echo
     echo "Processing: $SAMPLE"
 
-    # Preserve the existing STAR junction-table summary.
+    # --------------------------------------------------------
+    # Existing functionality: preserve the STAR junction table
+    # --------------------------------------------------------
     if [[ -f "$SJTAB" ]]; then
-        JUNCTION_TSV="${SAMPLE_OUTDIR}/${SAMPLE}.splice_junction_summary.tsv"
+        JUNCTION_TSV="${SAMPLE_DIR}/${SAMPLE}.splice_junction_summary.tsv"
 
         awk -v sample="$SAMPLE" 'BEGIN {
             total=0; annotated=0; novel=0; uniq=0; multi=0
@@ -110,79 +113,87 @@ while IFS= read -r SAMPLE_LINE; do
             multi += $8
         }
         END {
-            fraction_annotated=(total ? annotated/total : 0)
-            fraction_novel=(total ? novel/total : 0)
+            fa=(total ? annotated/total : 0)
+            fn=(total ? novel/total : 0)
             print "sample\ttotal_junctions\tannotated_junctions\tnovel_junctions\tfraction_annotated\tfraction_novel\tsum_unique_support\tsum_multi_support"
-            printf "%s\t%d\t%d\t%d\t%.6f\t%.6f\t%d\t%d\n", sample, total, annotated, novel, fraction_annotated, fraction_novel, uniq, multi
+            printf "%s\t%d\t%d\t%d\t%.6f\t%.6f\t%d\t%d\n", sample,total,annotated,novel,fa,fn,uniq,multi
         }' "$SJTAB" > "$JUNCTION_TSV"
 
-        echo "Junction summary: $JUNCTION_TSV"
+        echo "  Junction summary: $JUNCTION_TSV"
     else
-        echo "WARNING: SJ.out.tab not found; junction summary skipped"
+        echo "  WARNING: SJ.out.tab not found; junction summary skipped"
     fi
 
     if [[ -f "$STARLOG" ]]; then
-        cp -f "$STARLOG" "${SAMPLE_OUTDIR}/${SAMPLE}.Log.final.out"
+        cp -f "$STARLOG" "${SAMPLE_DIR}/${SAMPLE}.Log.final.out"
     else
-        echo "WARNING: STAR Log.final.out not found; log copy skipped"
+        echo "  WARNING: STAR Log.final.out not found; log copy skipped"
     fi
 
-    # A CIGAR containing N crosses one or more splice junctions. Restrict to
-    # primary, mapped, non-duplicate, QC-passing alignments with MAPQ >= 30.
-    if [[ ! -f "$BAM" ]]; then
-        echo "WARNING: BAM not found; read-fraction calculation skipped"
+    # --------------------------------------------------------
+    # Read-level nonsplice fraction for the condition box plot
+    # --------------------------------------------------------
+    [[ -f "$BAM" ]] || {
+        echo "  WARNING: BAM not found; read-fraction calculation skipped"
         continue
-    fi
+    }
 
     samtools quickcheck -v "$BAM" || {
         echo "ERROR: BAM failed samtools quickcheck: $BAM" >&2
         exit 1
     }
 
+    # One streaming pass through the BAM:
+    #   -F 3844 removes unmapped, secondary, QC-failed, duplicate and
+    #   supplementary records.
+    #   -q 30 retains uniquely mapped reads by the RSeQC-style threshold.
+    # A CIGAR containing N crosses at least one splice junction.
     COUNTS="$({
         samtools view -F 3844 -q "$MAPQ_MIN" "$BAM" |
         awk 'BEGIN {total=0; nonsplice=0; splice=0}
              {total++; if ($6 ~ /[0-9]+N/) splice++; else nonsplice++}
-             END {printf "%d\t%d\t%d", total, nonsplice, splice}'
+             END {printf "%d\t%d\t%d", total,nonsplice,splice}'
     })"
 
     IFS=$'\t' read -r TOTAL_UNIQUE NONSPLICE_READS SPLICE_READS <<< "$COUNTS"
 
     if (( TOTAL_UNIQUE == 0 )); then
-        FRACTION_SPLICED="0.000000"
-        echo "WARNING: No reads passed the primary/unique filters"
+        FRACTION_NONSPLICE="0.000000"
+        FRACTION_SPLICE="0.000000"
+        echo "  WARNING: No reads passed the primary/unique filters"
     else
-        FRACTION_SPLICED="$(
-            awk -v nonsplice="$NONSPLICE_READS" -v total="$TOTAL_UNIQUE" \
-                'BEGIN {printf "%.6f", 1 - (nonsplice / total)}'
-        )"
+        read -r FRACTION_NONSPLICE FRACTION_SPLICE < <(
+            awk -v n="$NONSPLICE_READS" -v s="$SPLICE_READS" -v t="$TOTAL_UNIQUE" \
+                'BEGIN {printf "%.6f %.6f\n", n/t, s/t}'
+        )
     fi
 
-    SAMPLE_TSV="${SAMPLE_OUTDIR}/${SAMPLE}.splice_read_fraction.tsv"
+    SAMPLE_TSV="${SAMPLE_DIR}/${SAMPLE}.splice_read_fraction.tsv"
     {
         printf '%b\n' "$HEADER"
         printf '%s\t%s\t%d\t%d\t%s\t%d\n' \
-            "$SAMPLE" "$CONDITION" "$TOTAL_UNIQUE" "$SPLICE_READS" \
-            "$FRACTION_SPLICED" "$MAPQ_MIN"
+            "$SAMPLE" "$CONDITION" "$TOTAL_UNIQUE" "$NONSPLICE_READS" \
+            "$FRACTION_NONSPLICE" "$MAPQ_MIN"
     } > "$SAMPLE_TSV"
 
     tail -n 1 "$SAMPLE_TSV" >> "$TMP_TSV"
     ((N_SAMPLES+=1))
 
-    echo "Unique mapped reads: $TOTAL_UNIQUE"
-    echo "Condition: $CONDITION"
-    echo "Spliced reads: $SPLICE_READS ($FRACTION_SPLICED)"
+    echo "  Unique mapped reads: $TOTAL_UNIQUE"
+    echo "  Condition:           $CONDITION"
+    echo "  Nonsplice:           $NONSPLICE_READS ($FRACTION_NONSPLICE)"
+
 done < <(tail -n +2 "$SAMPLESHEET")
 
 (( N_SAMPLES > 0 )) || {
-    echo "ERROR: No sample produced a spliced read fraction" >&2
+    echo "ERROR: No sample produced a nonsplice read fraction" >&2
     exit 1
 }
 
 mv -f "$TMP_TSV" "$COMBINED_TSV"
 
-# Plot one spliced-read fraction distribution per condition. Individual
-# points are samples; the annotation above each box is the unweighted mean.
+# Plot one nonsplice-fraction box per condition. Individual points show the
+# samples, and the printed value is the unweighted condition mean.
 python - "$COMBINED_TSV" "$CONDITION_SUMMARY_TSV" "$PLOT_PNG" "$PLOT_PDF" <<'PYTHON'
 import sys
 
@@ -213,13 +224,13 @@ if df["condition"].isna().any() or df["condition"].astype(str).str.strip().eq(""
 df["condition"] = df["condition"].astype(str)
 conditions = list(dict.fromkeys(df["condition"]))
 groups = [
-    df.loc[df["condition"] == condition, "fraction_spliced"].to_numpy(dtype=float)
+    df.loc[df["condition"] == condition, "fraction_nonsplice"].to_numpy(dtype=float)
     for condition in conditions
 ]
 means = np.array([values.mean() for values in groups])
 
 summary = (
-    df.groupby("condition", sort=False)["fraction_spliced"]
+    df.groupby("condition", sort=False)["fraction_nonsplice"]
       .agg(n_samples="size", mean_fraction="mean", median_fraction="median",
            standard_deviation="std", minimum_fraction="min", maximum_fraction="max")
       .reset_index()
@@ -273,7 +284,7 @@ ax.set_ylim(0.0, 1.12)
 ax.set_xticks(x_positions, conditions)
 ax.set_yticks(np.arange(0, 1.01, 0.20))
 ax.set_yticks(np.arange(0, 1.01, 0.05), minor=True)
-ax.set_ylabel("Fraction of uniquely mapped reads crossing splice junctions")
+ax.set_ylabel("Fraction of uniquely mapped reads in nonsplice regions")
 ax.set_xlabel("Condition")
 ax.spines[["top", "right"]].set_visible(False)
 for side in ["left", "bottom"]:
@@ -293,9 +304,12 @@ fig.savefig(pdf_file, bbox_inches="tight", facecolor="white")
 plt.close(fig)
 PYTHON
 
-echo "Splice junction QC complete."
+echo
+echo "============================================================"
+echo "Standalone condition-grouped splice-junction QC complete"
 echo "Samples plotted: $N_SAMPLES"
-echo "Combined table: $COMBINED_TSV"
+echo "Combined table:  $COMBINED_TSV"
 echo "Condition summary: $CONDITION_SUMMARY_TSV"
-echo "PNG plot: $PLOT_PNG"
-echo "PDF plot: $PLOT_PDF"
+echo "PNG plot:        $PLOT_PNG"
+echo "PDF plot:        $PLOT_PDF"
+echo "============================================================"

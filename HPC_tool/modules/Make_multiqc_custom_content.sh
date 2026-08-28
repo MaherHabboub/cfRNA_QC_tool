@@ -42,6 +42,7 @@ python - "$OUTDIR" "$CUSTOM_MQC_DIR" <<'PY'
 import sys
 import os
 import glob
+import shutil
 import pandas as pd
 import math
 import matplotlib.pyplot as plt
@@ -158,6 +159,25 @@ df_to_mqc_yaml(
     "Splice Junction Summary",
     "STAR SJ.out.tab-derived splice junction summary, including annotated and novel junction fractions."
 )
+
+splice_read_fractions = read_tsvs(
+    os.path.join(outdir, "splice_junctions", "**", "*.splice_read_fraction.tsv")
+)
+df_to_mqc_yaml(
+    splice_read_fractions,
+    os.path.join(custom_dir, "custom_splice_read_fractions_mqc.yaml"),
+    "custom_splice_read_fractions",
+    "Splice Read Fractions",
+    "Fraction of primary, mapped, non-duplicate, QC-passing reads with MAPQ at least 30 that cross one or more splice junctions."
+)
+
+splice_plot = os.path.join(outdir, "splice_junctions", "splice_read_fractions.png")
+if os.path.isfile(splice_plot):
+    multiqc_splice_plot = os.path.join(custom_dir, "splice_read_fractions_mqc.png")
+    shutil.copy2(splice_plot, multiqc_splice_plot)
+    print(f"Wrote: {multiqc_splice_plot}")
+else:
+    print("No splice read-fraction plot found; skipping MultiQC image.")
 
 fastqc = read_tsvs(os.path.join(outdir, "fastqc", "**", "*.fastqc_parsed_metrics.tsv"))
 df_to_mqc_yaml(

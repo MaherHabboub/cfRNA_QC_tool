@@ -202,7 +202,7 @@ submit_step \
     "09" \
     "splice_junction" \
     "Splice_Junction.sh" \
-    "02:00:00" \
+    "04:00:00" \
     "16G" \
     "1" \
     "afterok" \
