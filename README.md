@@ -95,6 +95,7 @@ between workflow steps.
 
 The HPC workflow includes:
 
+- Optional BAM downsampling for duplication and gene-body coverage.
 - GTF to BED12 annotation conversion.
 - Drop-off bin creation.
 - FastQC on raw FASTQ files.
@@ -109,13 +110,15 @@ The HPC workflow includes:
 - MultiQC report generation.
 - Final aggregation of QC metrics.
 
-Annotation setup, mapping-statistics parsing, and splice-junction summarization
-run once for the full cohort. FastQC, duplication, fragmentation, gene body
-coverage, read distribution, strandedness, and exon-intron drop-off run as one
-job per sample. Annotation setup runs first, QC modules run afterward, and
-reporting/aggregation runs at the end. The final MultiQC and aggregation steps
-use `afterany` dependencies so that summary reports can still be generated even
-if one QC module fails.
+When enabled, BAM downsampling runs once for the full cohort at the start of
+the workflow. Annotation setup, mapping-statistics parsing, and splice-junction
+summarization also run once for the full cohort. FastQC, duplication,
+fragmentation, gene body coverage, read distribution, strandedness, and
+exon-intron drop-off run as one job per sample. Only duplication and gene-body
+coverage wait for and use the BAM selected by downsampling; all other modules
+use the original samplesheet BAM. The final MultiQC and aggregation steps use
+`afterany` dependencies so that summary reports can still be generated even if
+one QC module fails.
 
 ### HPC Module Reference
 
@@ -127,6 +130,7 @@ those modules can also be run manually without a sample ID to process all rows.
 
 | Module | Required file inputs | Main outputs | Function |
 |---|---|---|---|
+| `Downsample.sh` | Samplesheet `bam` | `downsampled_bams/downsampling_manifest.tsv`; downsampled BAMs only for samples above the target | Uses deterministic `samtools view -s` sampling to retain approximately the configured alignment target. Samples at or below the target retain their original BAM path in the manifest. Only duplication and gene-body coverage use the selected BAM. |
 | `GTF_to_BED12.sh` | Config `GTF` | `annotation/<gtf-prefix>.genePred`, `.bed12.bed`, and `annotation/BED12.path.txt` | Converts the reference GTF to validated BED12 annotation for RSeQC. The path-record file tells downstream modules the exact BED12 filename generated. |
 | `Make_Dropoff_Bins.sh` | Config `GTF` | `annotation/exon_intron_bins/exon_intron_bins.bed` and the raw transcript-level bin BED | Builds deduplicated 50 bp exon- and intron-side bins around exon–intron boundaries for drop-off QC. |
 | `Fastqc.sh` | Samplesheet `fastq_r1`; also `fastq_r2` for `PE` samples | `fastqc/raw/<sample>/` FastQC HTML/ZIP reports and `<sample>.fastqc_parsed_metrics.tsv` | Runs FastQC and extracts last-10-base quality, minimum positional quality, GC peak, and maximum adapter content. |
@@ -163,6 +167,13 @@ CLUSTER_ENV_MODULE="env/software/doduo"
 # Threads used by FastQC in each per-sample job.
 FASTQC_THREADS=2
 
+# Enabled by default. Only duplication and gene-body coverage use the selected
+# BAM; every other module continues to use the original samplesheet BAM.
+DOWNSAMPLE_ENABLED="yes"
+DOWNSAMPLE_TARGET_ALIGNMENTS=1000000
+DOWNSAMPLE_SEED=42
+DOWNSAMPLE_THREADS=4
+
 SAMPLESHEET="/path/to/samplesheet.tsv"
 
 GTF="/path/to/reference.gtf"
@@ -174,6 +185,14 @@ OUTDIR="/path/to/qc_output"
 The workflow generates the BED12 annotation from `GTF` during its first step.
 Downstream modules read the generated path automatically, so `BED12` must not
 be set in the config.
+
+With `DOWNSAMPLE_ENABLED="yes"`, `Downsample.sh` writes
+`<OUTDIR>/downsampled_bams/downsampling_manifest.tsv` before duplication and
+gene-body coverage run. BAMs with no more than the target number of alignments
+are not copied or sampled; the manifest records their original BAM as selected.
+For larger BAMs, `samtools view -s` retains an approximately target-sized,
+deterministic subset using `DOWNSAMPLE_SEED`. Set `DOWNSAMPLE_ENABLED="no"` to
+skip the job and run duplication and gene-body coverage on the full BAMs.
 
 Use absolute paths where possible, especially on HPC systems.
 
@@ -305,6 +324,7 @@ The HPC workflow writes module-specific output directories under `OUTDIR`.
 Typical outputs include:
 
 - FastQC reports and parsed FastQC metrics.
+- A downsampling manifest and, when needed, selected downsampled BAMs.
 - Mapping summaries parsed from STAR logs.
 - Picard duplication metrics.
 - Fragment size summaries and plots.

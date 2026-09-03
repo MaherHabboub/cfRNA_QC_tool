@@ -29,9 +29,34 @@ source "$CONFIG"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
 FASTQC_THREADS="${FASTQC_THREADS:-2}"
+DOWNSAMPLE_ENABLED="${DOWNSAMPLE_ENABLED:-yes}"
+DOWNSAMPLE_TARGET_ALIGNMENTS="${DOWNSAMPLE_TARGET_ALIGNMENTS:-1000000}"
+DOWNSAMPLE_SEED="${DOWNSAMPLE_SEED:-42}"
+DOWNSAMPLE_THREADS="${DOWNSAMPLE_THREADS:-4}"
 
 if [[ ! "$FASTQC_THREADS" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: FASTQC_THREADS must be a positive integer: $FASTQC_THREADS" >&2
+    exit 1
+fi
+
+case "$DOWNSAMPLE_ENABLED" in
+    yes|no) ;;
+    *)
+        echo "ERROR: DOWNSAMPLE_ENABLED must be 'yes' or 'no': $DOWNSAMPLE_ENABLED" >&2
+        exit 1
+        ;;
+esac
+
+for value_name in DOWNSAMPLE_TARGET_ALIGNMENTS DOWNSAMPLE_SEED DOWNSAMPLE_THREADS; do
+    value="${!value_name}"
+    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: $value_name must be a non-negative integer: $value" >&2
+        exit 1
+    fi
+done
+
+if (( DOWNSAMPLE_TARGET_ALIGNMENTS < 1 || DOWNSAMPLE_THREADS < 1 )); then
+    echo "ERROR: DOWNSAMPLE_TARGET_ALIGNMENTS and DOWNSAMPLE_THREADS must be at least 1." >&2
     exit 1
 fi
 
@@ -70,6 +95,10 @@ echo "WRAPPER_DIR: $WRAPPER_DIR"
 echo "CONFIG: $CONFIG"
 echo "SAMPLESHEET: $SAMPLESHEET"
 echo "OUTDIR: $OUTDIR"
+echo "DOWNSAMPLE_ENABLED: $DOWNSAMPLE_ENABLED"
+if [[ "$DOWNSAMPLE_ENABLED" == "yes" ]]; then
+    echo "DOWNSAMPLE_TARGET_ALIGNMENTS: $DOWNSAMPLE_TARGET_ALIGNMENTS"
+fi
 echo "SUBMIT_LOG: $SUBMIT_LOG"
 echo "============================================================"
 echo
@@ -152,6 +181,24 @@ EOF
 }
 
 # ============================================================
+# 0. Optional BAM downsampling
+# ============================================================
+
+downsample_job=""
+
+if [[ "$DOWNSAMPLE_ENABLED" == "yes" ]]; then
+    downsample_job=$(
+    submit_step \
+        "00" \
+        "downsample" \
+        "Downsample.sh" \
+        "04:00:00" \
+        "16G" \
+        "$DOWNSAMPLE_THREADS"
+    )
+fi
+
+# ============================================================
 # 1. Annotation jobs
 # ============================================================
 
@@ -183,6 +230,10 @@ submit_step \
 # ============================================================
 
 qc_jobs=()
+
+if [[ -n "$downsample_job" ]]; then
+    qc_jobs+=("$downsample_job")
+fi
 
 map_job=$(
 submit_step \
@@ -216,6 +267,14 @@ qc_jobs+=("$splice_job")
 
 echo "Submitting per-sample QC jobs..." >&2
 
+duplication_dependency="$bins_job"
+genebody_dependency="$bins_job"
+
+if [[ -n "$downsample_job" ]]; then
+    duplication_dependency="${bins_job}:${downsample_job}"
+    genebody_dependency="${bins_job}:${downsample_job}"
+fi
+
 while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION
 do
     [[ -z "${SAMPLE:-}" ]] && continue
@@ -243,7 +302,7 @@ do
         "40G" \
         "2" \
         "afterok" \
-        "$bins_job" \
+        "$duplication_dependency" \
         "$SAMPLE"
     )
     qc_jobs+=("$dup_job")
@@ -252,11 +311,11 @@ do
     submit_step \
         "06" \
         "fragmentation_${SAMPLE}" \
-        "Fragmentation.sh" \
-        "2:00:00" \
-        "20G" \
-        "2" \
-        "afterok" \
+    "Fragmentation.sh" \
+    "2:00:00" \
+    "20G" \
+    "2" \
+    "afterok" \
         "$bins_job" \
         "$SAMPLE"
     )
@@ -266,12 +325,12 @@ do
     submit_step \
         "07" \
         "genebody_${SAMPLE}" \
-        "Genebody.sh" \
-        "6:00:00" \
-        "8G" \
-        "2" \
-        "afterok" \
-        "$bins_job" \
+    "Genebody.sh" \
+    "6:00:00" \
+    "8G" \
+    "2" \
+    "afterok" \
+        "$genebody_dependency" \
         "$SAMPLE"
     )
 
