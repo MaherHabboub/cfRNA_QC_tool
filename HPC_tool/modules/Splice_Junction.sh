@@ -61,7 +61,7 @@ echo "MAPQ cutoff: $MAPQ_MIN"
 N_SAMPLES=0
 
 # Expected samplesheet positions: sample ID (1), BAM (4), STAR log (5),
-# SJ.out.tab (6), and condition (final column).
+# SJ.out.tab (6), and condition (8). Optional columns may follow condition.
 while IFS= read -r SAMPLE_LINE; do
     IFS=$'\t' read -r -a FIELDS <<< "$SAMPLE_LINE"
 
@@ -75,7 +75,7 @@ while IFS= read -r SAMPLE_LINE; do
     BAM="${FIELDS[3]}"
     STARLOG="${FIELDS[4]}"
     SJTAB="${FIELDS[5]}"
-    CONDITION="${FIELDS[${#FIELDS[@]}-1]}"
+    CONDITION="${FIELDS[7]}"
 
     [[ -z "${SAMPLE:-}" ]] && continue
 

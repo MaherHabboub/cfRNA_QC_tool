@@ -6,7 +6,7 @@ CONFIG="${1:-}"
 TARGET_SAMPLE="${2:-ALL}"
 
 if [[ -z "$CONFIG" ]]; then
-    echo "Usage: bash Fragmentation.sh path/to/config.sh [sample_id]"
+    echo "Usage: bash Insert_Size_Distribution_Genomic.sh path/to/config.sh [sample_id]"
     exit 1
 fi
 
@@ -26,7 +26,7 @@ source "$CONFIG"
 # -----------------------------
 # Paths
 # -----------------------------
-RESULT_DIR="${OUTDIR}/fragment_size"
+RESULT_DIR="${OUTDIR}/insert_size_distribution"
 
 # -----------------------------
 # Software environment
@@ -38,10 +38,10 @@ module load Anaconda3/2024.06-1
 
 mkdir -p "$RESULT_DIR"
 
-echo "Running fragment size QC..."
+echo "Running genomic insert size distribution QC..."
 echo "Target sample: $TARGET_SAMPLE"
 
-tail -n +2 "$SAMPLESHEET" | while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION
+tail -n +2 "$SAMPLESHEET" | while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM
 do
     if [[ "$TARGET_SAMPLE" != "ALL" && "$SAMPLE" != "$TARGET_SAMPLE" ]]; then
         continue
@@ -52,7 +52,7 @@ do
     echo "Processing: $SAMPLE"
 
     if [[ "$LAYOUT" != "PE" ]]; then
-        echo "Skipping $SAMPLE (fragment size QC requires paired-end data)"
+        echo "Skipping $SAMPLE (insert size distribution QC requires paired-end data)"
         continue
     fi
 
@@ -66,9 +66,9 @@ do
 
     QBAM="${SAMPLE_OUTDIR}/${SAMPLE}.qnamesort.tmp.bam"
 
-    HISTO="${SAMPLE_OUTDIR}/${SAMPLE}.insert_size_histogram.tsv"
-    SUMMARY="${SAMPLE_OUTDIR}/${SAMPLE}.fragment_size_summary.tsv"
-    PLOT="${SAMPLE_OUTDIR}/${SAMPLE}.fragment_size_hist.png"
+    HISTO="${SAMPLE_OUTDIR}/${SAMPLE}.insert_size_distribution_histogram.tsv"
+    SUMMARY="${SAMPLE_OUTDIR}/${SAMPLE}.insert_size_distribution_summary.tsv"
+    PLOT="${SAMPLE_OUTDIR}/${SAMPLE}.insert_size_distribution_hist.png"
 
     echo "[1/3] Queryname sort..."
 
@@ -181,6 +181,7 @@ peak_enrich = (
 
 out = pd.DataFrame([{
     "sample": sample,
+    "coordinate_system": "genomic",
     "total_fragments": total,
     "fraction_20_120": frac_20_120,
     "fraction_150_180": frac_150_180,
@@ -213,9 +214,9 @@ plt.axvspan(
     alpha=0.2
 )
 
-plt.xlabel("Fragment length (bp)")
+plt.xlabel("Insert size (bp)")
 plt.ylabel("Count")
-plt.title(f"Fragment size distribution: {sample}")
+plt.title(f"Genomic Insert Size Distribution: {sample}")
 
 plt.tight_layout()
 
@@ -229,4 +230,4 @@ PY
 
 done
 
-echo "Fragment size QC complete."
+echo "Genomic insert size distribution QC complete."

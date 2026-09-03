@@ -19,7 +19,8 @@ DOWNSAMPLE_TARGET_ALIGNMENTS=1000000
 DOWNSAMPLE_SEED=42
 DOWNSAMPLE_THREADS=4
 
-# Input manifest
+# Input manifest. Its optional ninth column, transcriptome_bam, selects the
+# transcriptome insert-size method for that sample.
 SAMPLESHEET="/scratch/gent/vo/000/gvo00027/projects/MHB/Cohort_A/QC_master/inputs/cohortA_10samples_samplesheet.tsv"
 
 # Reference files

@@ -156,7 +156,7 @@ find "$OUTDIR" -type f \( \
     -name "*.splice_junction_summary.tsv" -o \
     -name "*.splice_read_fraction.tsv" -o \
     -name "splice_read_fraction_cohort_summary.tsv" -o \
-    -name "*.fragment_size_summary.tsv" -o \
+    -name "*.insert_size_distribution_summary.tsv" -o \
     -name "*.fastqc_parsed_metrics.tsv" -o \
     -name "*.dropoff_profile.tsv" \
 \) | while read -r f

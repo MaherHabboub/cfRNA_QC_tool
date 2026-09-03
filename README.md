@@ -9,7 +9,7 @@ cfRNA-seq data can show problems that are not visible from one metric alone.
 This workflow therefore combines sequencing-level, alignment-level,
 quantification-level, per-sample, and cohort-level checks. The goal is to help
 researchers inspect standard RNA-seq QC metrics together with cfRNA-specific
-patterns such as fragment size profiles, gene body coverage, exon-intron
+patterns such as insert size distributions, gene body coverage, exon-intron
 drop-off, splice junction support, biotype composition, platelet signals, and
 possible DNA contamination patterns.
 
@@ -101,7 +101,7 @@ The HPC workflow includes:
 - FastQC on raw FASTQ files.
 - STAR mapping statistics parsing.
 - Picard duplication metrics.
-- Fragment size distribution analysis.
+- Insert size distribution analysis.
 - RSeQC gene body coverage.
 - RSeQC read distribution.
 - STAR splice junction summary.
@@ -112,8 +112,8 @@ The HPC workflow includes:
 
 When enabled, BAM downsampling runs once for the full cohort at the start of
 the workflow. Annotation setup, mapping-statistics parsing, and splice-junction
-summarization also run once for the full cohort. FastQC, duplication,
-fragmentation, gene body coverage, read distribution, strandedness, and
+summarization also run once for the full cohort. FastQC, duplication, insert
+size distribution, gene body coverage, read distribution, strandedness, and
 exon-intron drop-off run as one job per sample. Only duplication and gene-body
 coverage wait for and use the BAM selected by downsampling; all other modules
 use the original samplesheet BAM. The final MultiQC and aggregation steps use
@@ -136,7 +136,8 @@ those modules can also be run manually without a sample ID to process all rows.
 | `Fastqc.sh` | Samplesheet `fastq_r1`; also `fastq_r2` for `PE` samples | `fastqc/raw/<sample>/` FastQC HTML/ZIP reports and `<sample>.fastqc_parsed_metrics.tsv` | Runs FastQC and extracts last-10-base quality, minimum positional quality, GC peak, and maximum adapter content. |
 | `Map.sh` | Samplesheet `star_log` | `mapping/<sample>/<sample>.Log.final.out` and `.mapping_summary.tsv` | Copies the STAR final log and extracts mapping, multimapping, and unmapped-read metrics. |
 | `Duplication.sh` | Samplesheet `bam` | `duplication/<sample>/<sample>.markdup.metrics.txt` and `.duplication_summary.tsv` | Runs Picard MarkDuplicates and records the alignment-based duplicate fraction. |
-| `Fragmentation.sh` | Samplesheet `bam` for `PE` samples | `fragment_size/<sample>/` insert-size histogram TSV, summary TSV, and histogram PNG | Derives paired-end fragment lengths and summarizes cfRNA-relevant size windows and 167 bp peak enrichment. |
+| `Insert_Size_Distribution_Genomic.sh` | Samplesheet `bam` for `PE` samples without `transcriptome_bam` | `insert_size_distribution/<sample>/` histogram TSV, summary TSV, and histogram PNG | Uses genomic-coordinate paired-end spans to derive insert sizes and summarize cfRNA-relevant size windows and 167 bp peak enrichment. |
+| `Insert_Size_Distribution_Transcriptome.sh` | Samplesheet `transcriptome_bam` for `PE` samples | The same `insert_size_distribution/<sample>/` layout, plus classification and ambiguous-pair-example TSVs | Uses STAR transcript-coordinate alignments. It collapses placements by original read pair, accepts one distinct absolute TLEN, and excludes pairs with conflicting transcript-placement lengths. |
 | `Genebody.sh` | Samplesheet `bam`; generated `annotation/BED12.path.txt` and referenced BED12 | `gene_body_coverage/<sample>.geneBodyCoverage.txt` and RSeQC companion outputs | Builds a BAM index and runs RSeQC gene-body coverage to assess 5′–3′ coverage bias. |
 | `Read_Distribution.sh` | Samplesheet `bam`; generated `annotation/BED12.path.txt` and referenced BED12 | `read_distribution/<sample>/<sample>.read_distribution.txt` | Runs RSeQC feature distribution to quantify reads in CDS exons, UTR exons, introns, and intergenic regions. |
 | `Splice_Junction.sh` | Samplesheet `bam`, `sj_tab`, and `condition`; optional `star_log` | Per-sample STAR junction summary and spliced-read-fraction TSVs in `splice_junctions/<sample>/`; cohort `splice_read_fractions.tsv`, condition summary TSV, PNG, and PDF in `splice_junctions/` | Summarizes STAR junction support and, from primary MAPQ ≥30 BAM alignments, compares the fraction of reads that cross one or more splice junctions across sample conditions. The condition PNG is included in MultiQC. |
@@ -144,7 +145,7 @@ those modules can also be run manually without a sample ID to process all rows.
 | `Dropoff.sh` | Samplesheet `bam`; generated `annotation/exon_intron_bins/exon_intron_bins.bed` | `dropoff/<sample>/` bin-coverage TSV, normalized drop-off profile TSV, and PNG | Counts split-read coverage across exon–intron boundary bins and visualizes normalized exon-to-intron drop-off. |
 | `Make_multiqc_custom_content.sh` | Existing QC TSV/PNG outputs under `OUTDIR` | `multiqc/custom_content/` MultiQC YAML tables, compact drop-off TSV, and combined PNGs | Converts pipeline-specific metrics and plots into MultiQC custom-content files. It is called automatically by `Multiqc.sh`. |
 | `Multiqc.sh` | Existing QC outputs under `OUTDIR`; `Make_multiqc_custom_content.sh` | `multiqc/hpc_qc_multiqc_report.html`, report-data directory, staged input, and config files | Stages standard and custom outputs, then generates the combined MultiQC report. |
-| `Aggregate.sh` | `SAMPLESHEET`; existing mapping, FastQC, duplication, fragmentation, read-distribution, and splice-junction outputs; optional MultiQC report | `summary/hpc_qc_summary.tsv` and `summary/hpc_qc_transfer_bundle.zip` | Combines selected sample-level QC metrics into one TSV and packages it with the MultiQC report/data for transfer. |
+| `Aggregate.sh` | `SAMPLESHEET`; existing mapping, FastQC, duplication, insert-size, read-distribution, and splice-junction outputs; optional MultiQC report | `summary/hpc_qc_summary.tsv` and `summary/hpc_qc_transfer_bundle.zip` | Combines selected sample-level QC metrics, including the insert-size coordinate system, into one TSV and packages it with the MultiQC report/data for transfer. |
 
 ### Example HPC Config
 
@@ -201,13 +202,21 @@ Use absolute paths where possible, especially on HPC systems.
 The samplesheet is tab-separated and contains one row per sample:
 
 ```text
-sample_id	fastq_r1	fastq_r2	bam	star_log	sj_tab	layout	condition
-sample_01	/path/S1_R1.fastq.gz	/path/S1_R2.fastq.gz	/path/S1.bam	/path/S1.Log.final.out	/path/S1.SJ.out.tab	PE	CONTROL
-sample_02	/path/S2_R1.fastq.gz	/path/S2_R2.fastq.gz	/path/S2.bam	/path/S2.Log.final.out	/path/S2.SJ.out.tab	PE	CASE
+sample_id	fastq_r1	fastq_r2	bam	star_log	sj_tab	layout	condition	transcriptome_bam
+sample_01	/path/S1_R1.fastq.gz	/path/S1_R2.fastq.gz	/path/S1.bam	/path/S1.Log.final.out	/path/S1.SJ.out.tab	PE	CONTROL	/path/S1.Aligned.toTranscriptome.out.bam
+sample_02	/path/S2_R1.fastq.gz	/path/S2_R2.fastq.gz	/path/S2.bam	/path/S2.Log.final.out	/path/S2.SJ.out.tab	PE	CASE	NA
 ```
 
 For single-end data, use the layout value expected by the modules and leave
 unused paired-end fields consistently filled according to your local convention.
+
+`transcriptome_bam` is an optional ninth column used only for Insert Size
+Distribution. Existing eight-column samplesheets remain valid and use the
+genomic-coordinate method. For a non-empty value other than `NA`, the
+submitter uses the transcriptome method (`24 h`, `40G`, `4 CPUs`) for that
+sample; an invalid supplied path fails rather than silently falling back. When
+the field is empty or `NA`, it uses the genomic method (`2 h`, `20G`, `2 CPUs`).
+The required `bam` column remains the genomic BAM used by all other modules.
 
 ### Run the HPC Workflow
 
@@ -327,7 +336,7 @@ Typical outputs include:
 - A downsampling manifest and, when needed, selected downsampled BAMs.
 - Mapping summaries parsed from STAR logs.
 - Picard duplication metrics.
-- Fragment size summaries and plots.
+- Insert size distribution summaries and plots.
 - Gene body coverage outputs.
 - Read distribution summaries.
 - Splice junction summaries.

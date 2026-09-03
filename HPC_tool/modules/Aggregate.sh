@@ -98,7 +98,7 @@ def clean_sample_from_path(path):
     suffixes = [
         ".mapping_summary.tsv",
         ".duplication_summary.tsv",
-        ".fragment_size_summary.tsv",
+        ".insert_size_distribution_summary.tsv",
         ".splice_junction_summary.tsv",
         ".fastqc_parsed_metrics.tsv",
         ".read_distribution.txt",
@@ -164,6 +164,7 @@ for col in required_cols:
 
 summary = samples[["sample_id", "condition", "layout"]].copy()
 summary = summary.rename(columns={"sample_id": "sample"})
+summary["insert_size_coordinate_system"] = "NA"
 
 # -----------------------------
 # Initialize selected metric columns
@@ -319,15 +320,15 @@ for f in dup_files:
         summary.loc[sample, "percent_duplication"] = val
 
 # -----------------------------
-# Fragment size summary
+# Insert size distribution summary
 # -----------------------------
 
-frag_files = glob.glob(
-    str(outdir / "fragment_size" / "**" / "*.fragment_size_summary.tsv"),
+insert_size_files = glob.glob(
+    str(outdir / "insert_size_distribution" / "**" / "*.insert_size_distribution_summary.tsv"),
     recursive=True
 )
 
-for f in frag_files:
+for f in insert_size_files:
     df = read_tsv_if_exists(f)
 
     if df.empty:
@@ -338,6 +339,10 @@ for f in frag_files:
 
         if sample not in summary.index:
             continue
+
+        coordinate_system = str(row.get("coordinate_system", "")).strip()
+        if coordinate_system:
+            summary.loc[sample, "insert_size_coordinate_system"] = coordinate_system
 
         for col in [
             "fraction_20_120",
@@ -489,7 +494,7 @@ for f in sj_files:
 
 summary = summary.reset_index(drop=True)
 
-final_cols = ["sample", "condition", "layout"] + metric_cols
+final_cols = ["sample", "condition", "layout", "insert_size_coordinate_system"] + metric_cols
 summary = summary[final_cols]
 
 summary.to_csv(summary_tsv, sep="\t", index=False, na_rep="NA")

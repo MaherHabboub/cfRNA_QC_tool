@@ -60,6 +60,25 @@ if (( DOWNSAMPLE_TARGET_ALIGNMENTS < 1 || DOWNSAMPLE_THREADS < 1 )); then
     exit 1
 fi
 
+if [[ ! -f "$SAMPLESHEET" ]]; then
+    echo "ERROR: Samplesheet not found: $SAMPLESHEET" >&2
+    exit 1
+fi
+
+# Validate all optional transcriptome BAM paths before any jobs are submitted.
+# Column 9 is optional; eight-column samplesheets leave TRANSCRIPTOME_BAM empty.
+while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM
+do
+    [[ -z "${SAMPLE:-}" ]] && continue
+
+    TRANSCRIPTOME_BAM="${TRANSCRIPTOME_BAM//$'\r'/}"
+
+    if [[ -n "$TRANSCRIPTOME_BAM" && "$TRANSCRIPTOME_BAM" != "NA" && "$TRANSCRIPTOME_BAM" != "." && ! -f "$TRANSCRIPTOME_BAM" ]]; then
+        echo "ERROR: transcriptome_bam not found for $SAMPLE: $TRANSCRIPTOME_BAM" >&2
+        exit 1
+    fi
+done < <(tail -n +2 "$SAMPLESHEET")
+
 # -----------------------------
 # Optional HPC cluster setup
 # -----------------------------
@@ -275,7 +294,7 @@ if [[ -n "$downsample_job" ]]; then
     genebody_dependency="${bins_job}:${downsample_job}"
 fi
 
-while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION
+while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM
 do
     [[ -z "${SAMPLE:-}" ]] && continue
 
@@ -307,19 +326,33 @@ do
     )
     qc_jobs+=("$dup_job")
 
-    frag_job=$(
+    TRANSCRIPTOME_BAM="${TRANSCRIPTOME_BAM//$'\r'/}"
+
+    if [[ -n "$TRANSCRIPTOME_BAM" && "$TRANSCRIPTOME_BAM" != "NA" && "$TRANSCRIPTOME_BAM" != "." ]]; then
+        insert_size_module="Insert_Size_Distribution_Transcriptome.sh"
+        insert_size_time="24:00:00"
+        insert_size_memory="40G"
+        insert_size_cpus="4"
+    else
+        insert_size_module="Insert_Size_Distribution_Genomic.sh"
+        insert_size_time="2:00:00"
+        insert_size_memory="20G"
+        insert_size_cpus="2"
+    fi
+
+    insert_size_job=$(
     submit_step \
         "06" \
-        "fragmentation_${SAMPLE}" \
-    "Fragmentation.sh" \
-    "2:00:00" \
-    "20G" \
-    "2" \
-    "afterok" \
+        "insert_size_distribution_${SAMPLE}" \
+        "$insert_size_module" \
+        "$insert_size_time" \
+        "$insert_size_memory" \
+        "$insert_size_cpus" \
+        "afterok" \
         "$bins_job" \
         "$SAMPLE"
     )
-    qc_jobs+=("$frag_job")
+    qc_jobs+=("$insert_size_job")
 
     genebody_job=$(
     submit_step \
@@ -373,7 +406,7 @@ done < <(tail -n +2 "$SAMPLESHEET")
 
 echo "Submitting one Dropoff job per sample..." >&2
 
-while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION
+while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM
 do
     [[ -z "${SAMPLE:-}" ]] && continue
 
