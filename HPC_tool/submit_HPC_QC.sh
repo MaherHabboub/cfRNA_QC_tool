@@ -33,6 +33,15 @@ DOWNSAMPLE_ENABLED="${DOWNSAMPLE_ENABLED:-yes}"
 DOWNSAMPLE_TARGET_ALIGNMENTS="${DOWNSAMPLE_TARGET_ALIGNMENTS:-1000000}"
 DOWNSAMPLE_SEED="${DOWNSAMPLE_SEED:-42}"
 DOWNSAMPLE_THREADS="${DOWNSAMPLE_THREADS:-4}"
+FASTQC_ENABLED="${FASTQC_ENABLED:-yes}"
+MAPPING_ENABLED="${MAPPING_ENABLED:-yes}"
+DUPLICATION_ENABLED="${DUPLICATION_ENABLED:-yes}"
+INSERT_SIZE_ENABLED="${INSERT_SIZE_ENABLED:-yes}"
+GENEBODY_ENABLED="${GENEBODY_ENABLED:-yes}"
+READ_DISTRIBUTION_ENABLED="${READ_DISTRIBUTION_ENABLED:-yes}"
+SPLICE_JUNCTION_ENABLED="${SPLICE_JUNCTION_ENABLED:-yes}"
+STRANDEDNESS_ENABLED="${STRANDEDNESS_ENABLED:-yes}"
+DROPOFF_ENABLED="${DROPOFF_ENABLED:-yes}"
 
 if [[ ! "$FASTQC_THREADS" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: FASTQC_THREADS must be a positive integer: $FASTQC_THREADS" >&2
@@ -46,6 +55,29 @@ case "$DOWNSAMPLE_ENABLED" in
         exit 1
         ;;
 esac
+
+MODULE_SWITCHES=(
+    FASTQC_ENABLED
+    MAPPING_ENABLED
+    DUPLICATION_ENABLED
+    INSERT_SIZE_ENABLED
+    GENEBODY_ENABLED
+    READ_DISTRIBUTION_ENABLED
+    SPLICE_JUNCTION_ENABLED
+    STRANDEDNESS_ENABLED
+    DROPOFF_ENABLED
+)
+
+for switch_name in "${MODULE_SWITCHES[@]}"; do
+    switch_value="${!switch_name}"
+    case "$switch_value" in
+        yes|no) ;;
+        *)
+            echo "ERROR: $switch_name must be 'yes' or 'no': $switch_value" >&2
+            exit 1
+            ;;
+    esac
+done
 
 for value_name in DOWNSAMPLE_TARGET_ALIGNMENTS DOWNSAMPLE_SEED DOWNSAMPLE_THREADS; do
     value="${!value_name}"
@@ -118,6 +150,9 @@ echo "DOWNSAMPLE_ENABLED: $DOWNSAMPLE_ENABLED"
 if [[ "$DOWNSAMPLE_ENABLED" == "yes" ]]; then
     echo "DOWNSAMPLE_TARGET_ALIGNMENTS: $DOWNSAMPLE_TARGET_ALIGNMENTS"
 fi
+for switch_name in "${MODULE_SWITCHES[@]}"; do
+    echo "$switch_name: ${!switch_name}"
+done
 echo "SUBMIT_LOG: $SUBMIT_LOG"
 echo "============================================================"
 echo
@@ -248,37 +283,41 @@ submit_step \
 # Mapping and splice-junction summaries run once for the full cohort.
 # ============================================================
 
-qc_jobs=()
+qc_jobs=("$bins_job")
 
 if [[ -n "$downsample_job" ]]; then
     qc_jobs+=("$downsample_job")
 fi
 
-map_job=$(
-submit_step \
-    "04" \
-    "mapping" \
-    "Map.sh" \
-    "02:00:00" \
-    "16G" \
-    "1" \
-    "afterok" \
-    "$bins_job"
-)
-qc_jobs+=("$map_job")
+if [[ "$MAPPING_ENABLED" == "yes" ]]; then
+    map_job=$(
+    submit_step \
+        "04" \
+        "mapping" \
+        "Map.sh" \
+        "02:00:00" \
+        "16G" \
+        "1" \
+        "afterok" \
+        "$bins_job"
+    )
+    qc_jobs+=("$map_job")
+fi
 
-splice_job=$(
-submit_step \
-    "09" \
-    "splice_junction" \
-    "Splice_Junction.sh" \
-    "04:00:00" \
-    "16G" \
-    "1" \
-    "afterok" \
-    "$bins_job"
-)
-qc_jobs+=("$splice_job")
+if [[ "$SPLICE_JUNCTION_ENABLED" == "yes" ]]; then
+    splice_job=$(
+    submit_step \
+        "09" \
+        "splice_junction" \
+        "Splice_Junction.sh" \
+        "04:00:00" \
+        "16G" \
+        "1" \
+        "afterok" \
+        "$bins_job"
+    )
+    qc_jobs+=("$splice_job")
+fi
 
 # ============================================================
 # 2b. Per-sample QC module jobs
@@ -298,33 +337,37 @@ while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION 
 do
     [[ -z "${SAMPLE:-}" ]] && continue
 
-    fastqc_job=$(
-    submit_step \
-        "03" \
-        "fastqc_${SAMPLE}" \
-        "Fastqc.sh" \
-        "01:00:00" \
-        "3G" \
-        "$FASTQC_THREADS" \
-        "afterok" \
-        "$bins_job" \
-        "$SAMPLE"
-    )
-    qc_jobs+=("$fastqc_job")
+    if [[ "$FASTQC_ENABLED" == "yes" ]]; then
+        fastqc_job=$(
+        submit_step \
+            "03" \
+            "fastqc_${SAMPLE}" \
+            "Fastqc.sh" \
+            "01:00:00" \
+            "3G" \
+            "$FASTQC_THREADS" \
+            "afterok" \
+            "$bins_job" \
+            "$SAMPLE"
+        )
+        qc_jobs+=("$fastqc_job")
+    fi
 
-    dup_job=$(
-    submit_step \
-        "05" \
-        "duplication_${SAMPLE}" \
-        "Duplication.sh" \
-        "2:00:00" \
-        "40G" \
-        "2" \
-        "afterok" \
-        "$duplication_dependency" \
-        "$SAMPLE"
-    )
-    qc_jobs+=("$dup_job")
+    if [[ "$DUPLICATION_ENABLED" == "yes" ]]; then
+        dup_job=$(
+        submit_step \
+            "05" \
+            "duplication_${SAMPLE}" \
+            "Duplication.sh" \
+            "2:00:00" \
+            "40G" \
+            "2" \
+            "afterok" \
+            "$duplication_dependency" \
+            "$SAMPLE"
+        )
+        qc_jobs+=("$dup_job")
+    fi
 
     TRANSCRIPTOME_BAM="${TRANSCRIPTOME_BAM//$'\r'/}"
 
@@ -340,62 +383,69 @@ do
         insert_size_cpus="2"
     fi
 
-    insert_size_job=$(
-    submit_step \
-        "06" \
-        "insert_size_distribution_${SAMPLE}" \
-        "$insert_size_module" \
-        "$insert_size_time" \
-        "$insert_size_memory" \
-        "$insert_size_cpus" \
-        "afterok" \
-        "$bins_job" \
-        "$SAMPLE"
-    )
-    qc_jobs+=("$insert_size_job")
+    if [[ "$INSERT_SIZE_ENABLED" == "yes" ]]; then
+        insert_size_job=$(
+        submit_step \
+            "06" \
+            "insert_size_distribution_${SAMPLE}" \
+            "$insert_size_module" \
+            "$insert_size_time" \
+            "$insert_size_memory" \
+            "$insert_size_cpus" \
+            "afterok" \
+            "$bins_job" \
+            "$SAMPLE"
+        )
+        qc_jobs+=("$insert_size_job")
+    fi
 
-    genebody_job=$(
-    submit_step \
-        "07" \
-        "genebody_${SAMPLE}" \
-    "Genebody.sh" \
-    "6:00:00" \
-    "8G" \
-    "2" \
-    "afterok" \
-        "$genebody_dependency" \
-        "$SAMPLE"
-    )
+    if [[ "$GENEBODY_ENABLED" == "yes" ]]; then
+        genebody_job=$(
+        submit_step \
+            "07" \
+            "genebody_${SAMPLE}" \
+            "Genebody.sh" \
+            "6:00:00" \
+            "8G" \
+            "2" \
+            "afterok" \
+            "$genebody_dependency" \
+            "$SAMPLE"
+        )
+        qc_jobs+=("$genebody_job")
+    fi
 
-    qc_jobs+=("$genebody_job")
+    if [[ "$READ_DISTRIBUTION_ENABLED" == "yes" ]]; then
+        read_dist_job=$(
+        submit_step \
+            "08" \
+            "read_distribution_${SAMPLE}" \
+            "Read_Distribution.sh" \
+            "02:00:00" \
+            "8G" \
+            "1" \
+            "afterok" \
+            "$bins_job" \
+            "$SAMPLE"
+        )
+        qc_jobs+=("$read_dist_job")
+    fi
 
-    read_dist_job=$(
-    submit_step \
-        "08" \
-        "read_distribution_${SAMPLE}" \
-        "Read_Distribution.sh" \
-        "02:00:00" \
-        "8G" \
-        "1" \
-        "afterok" \
-        "$bins_job" \
-        "$SAMPLE"
-    )
-    qc_jobs+=("$read_dist_job")
-
-    strand_job=$(
-    submit_step \
-        "10" \
-        "strandedness_${SAMPLE}" \
-        "Strandedness.sh" \
-        "02:00:00" \
-        "4G" \
-        "1" \
-        "afterok" \
-        "$bins_job" \
-        "$SAMPLE"
-    )
-    qc_jobs+=("$strand_job")
+    if [[ "$STRANDEDNESS_ENABLED" == "yes" ]]; then
+        strand_job=$(
+        submit_step \
+            "10" \
+            "strandedness_${SAMPLE}" \
+            "Strandedness.sh" \
+            "02:00:00" \
+            "4G" \
+            "1" \
+            "afterok" \
+            "$bins_job" \
+            "$SAMPLE"
+        )
+        qc_jobs+=("$strand_job")
+    fi
 
 done < <(tail -n +2 "$SAMPLESHEET")
 
@@ -404,28 +454,30 @@ done < <(tail -n +2 "$SAMPLESHEET")
 # One job per sample, because this module can be slow and memory-intensive.
 # ============================================================
 
-echo "Submitting one Dropoff job per sample..." >&2
+if [[ "$DROPOFF_ENABLED" == "yes" ]]; then
+    echo "Submitting one Dropoff job per sample..." >&2
 
-while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM
-do
-    [[ -z "${SAMPLE:-}" ]] && continue
+    while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM
+    do
+        [[ -z "${SAMPLE:-}" ]] && continue
 
-    dropoff_job=$(
-    submit_step \
-        "11" \
-        "dropoff_${SAMPLE}" \
-        "Dropoff.sh" \
-        "3:00:00" \
-        "6G" \
-        "2" \
-        "afterok" \
-        "$bins_job" \
-        "$SAMPLE"
-    )
+        dropoff_job=$(
+        submit_step \
+            "11" \
+            "dropoff_${SAMPLE}" \
+            "Dropoff.sh" \
+            "3:00:00" \
+            "6G" \
+            "2" \
+            "afterok" \
+            "$bins_job" \
+            "$SAMPLE"
+        )
 
-    qc_jobs+=("$dropoff_job")
+        qc_jobs+=("$dropoff_job")
 
-done < <(tail -n +2 "$SAMPLESHEET")
+    done < <(tail -n +2 "$SAMPLESHEET")
+fi
 
 # Join QC jobs with colon for Slurm dependency
 qc_dep="$(IFS=:; echo "${qc_jobs[*]}")"

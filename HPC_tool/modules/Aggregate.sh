@@ -16,6 +16,30 @@ fi
 
 source "$CONFIG"
 
+MODULE_SWITCHES=(
+    FASTQC_ENABLED
+    MAPPING_ENABLED
+    DUPLICATION_ENABLED
+    INSERT_SIZE_ENABLED
+    GENEBODY_ENABLED
+    READ_DISTRIBUTION_ENABLED
+    SPLICE_JUNCTION_ENABLED
+    STRANDEDNESS_ENABLED
+    DROPOFF_ENABLED
+)
+
+for switch_name in "${MODULE_SWITCHES[@]}"; do
+    switch_value="${!switch_name:-yes}"
+    case "$switch_value" in
+        yes|no) ;;
+        *)
+            echo "ERROR: $switch_name must be 'yes' or 'no': $switch_value" >&2
+            exit 1
+            ;;
+    esac
+    printf -v "$switch_name" '%s' "$switch_value"
+done
+
 # -----------------------------
 # Required config variables
 # -----------------------------
@@ -45,7 +69,9 @@ echo "OUTDIR: $OUTDIR"
 echo "SUMMARY_TSV: $SUMMARY_TSV"
 echo "ZIP_OUT: $ZIP_OUT"
 
-python - "$SAMPLESHEET" "$OUTDIR" "$SUMMARY_TSV" "$ZIP_OUT" "$MULTIQC_REPORT" "$MULTIQC_DATA_DIR" <<'PY'
+python - "$SAMPLESHEET" "$OUTDIR" "$SUMMARY_TSV" "$ZIP_OUT" "$MULTIQC_REPORT" "$MULTIQC_DATA_DIR" \
+    "$FASTQC_ENABLED" "$MAPPING_ENABLED" "$DUPLICATION_ENABLED" \
+    "$INSERT_SIZE_ENABLED" "$READ_DISTRIBUTION_ENABLED" "$SPLICE_JUNCTION_ENABLED" <<'PY'
 import sys
 import os
 import glob
@@ -61,6 +87,12 @@ summary_tsv = Path(sys.argv[3])
 zip_out = Path(sys.argv[4])
 multiqc_report = Path(sys.argv[5])
 multiqc_data_dir = Path(sys.argv[6])
+fastqc_enabled = sys.argv[7] == "yes"
+mapping_enabled = sys.argv[8] == "yes"
+duplication_enabled = sys.argv[9] == "yes"
+insert_size_enabled = sys.argv[10] == "yes"
+read_distribution_enabled = sys.argv[11] == "yes"
+splice_junction_enabled = sys.argv[12] == "yes"
 
 summary_tsv.parent.mkdir(parents=True, exist_ok=True)
 
@@ -213,7 +245,7 @@ summary = summary.set_index("sample", drop=False)
 fastqc_files = glob.glob(
     str(outdir / "fastqc" / "raw" / "**" / "*.fastqc_parsed_metrics.tsv"),
     recursive=True
-)
+) if fastqc_enabled else []
 
 fq_rows = []
 
@@ -256,7 +288,7 @@ if fq_rows:
 mapping_files = glob.glob(
     str(outdir / "mapping" / "**" / "*.mapping_summary.tsv"),
     recursive=True
-)
+) if mapping_enabled else []
 
 for f in mapping_files:
     df = read_tsv_if_exists(f)
@@ -296,7 +328,7 @@ for f in mapping_files:
 dup_files = glob.glob(
     str(outdir / "duplication" / "**" / "*.duplication_summary.tsv"),
     recursive=True
-)
+) if duplication_enabled else []
 
 for f in dup_files:
     df = read_tsv_if_exists(f)
@@ -326,7 +358,7 @@ for f in dup_files:
 insert_size_files = glob.glob(
     str(outdir / "insert_size_distribution" / "**" / "*.insert_size_distribution_summary.tsv"),
     recursive=True
-)
+) if insert_size_enabled else []
 
 for f in insert_size_files:
     df = read_tsv_if_exists(f)
@@ -439,7 +471,7 @@ def parse_read_distribution_file(path):
 rd_files = glob.glob(
     str(outdir / "read_distribution" / "**" / "*.read_distribution.txt"),
     recursive=True
-)
+) if read_distribution_enabled else []
 
 for f in rd_files:
     sample = clean_sample_from_path(f)
@@ -459,7 +491,7 @@ for f in rd_files:
 sj_files = glob.glob(
     str(outdir / "splice_junctions" / "**" / "*.splice_junction_summary.tsv"),
     recursive=True
-)
+) if splice_junction_enabled else []
 
 for f in sj_files:
     df = read_tsv_if_exists(f)

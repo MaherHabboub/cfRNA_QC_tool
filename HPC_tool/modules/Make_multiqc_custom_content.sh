@@ -16,6 +16,30 @@ fi
 
 source "$CONFIG"
 
+MODULE_SWITCHES=(
+    FASTQC_ENABLED
+    MAPPING_ENABLED
+    DUPLICATION_ENABLED
+    INSERT_SIZE_ENABLED
+    GENEBODY_ENABLED
+    READ_DISTRIBUTION_ENABLED
+    SPLICE_JUNCTION_ENABLED
+    STRANDEDNESS_ENABLED
+    DROPOFF_ENABLED
+)
+
+for switch_name in "${MODULE_SWITCHES[@]}"; do
+    switch_value="${!switch_name:-yes}"
+    case "$switch_value" in
+        yes|no) ;;
+        *)
+            echo "ERROR: $switch_name must be 'yes' or 'no': $switch_value" >&2
+            exit 1
+            ;;
+    esac
+    printf -v "$switch_name" '%s' "$switch_value"
+done
+
 # -----------------------------
 # Required config variables
 # -----------------------------
@@ -38,7 +62,9 @@ find "$CUSTOM_MQC_DIR" -type f -delete 2>/dev/null || true
 echo "Creating MultiQC custom content..."
 echo "Custom content folder: $CUSTOM_MQC_DIR"
 
-python - "$OUTDIR" "$CUSTOM_MQC_DIR" <<'PY'
+python - "$OUTDIR" "$CUSTOM_MQC_DIR" \
+    "$FASTQC_ENABLED" "$MAPPING_ENABLED" "$INSERT_SIZE_ENABLED" \
+    "$SPLICE_JUNCTION_ENABLED" "$DROPOFF_ENABLED" <<'PY'
 import sys
 import os
 import glob
@@ -49,6 +75,11 @@ import matplotlib.pyplot as plt
 
 outdir = sys.argv[1]
 custom_dir = sys.argv[2]
+fastqc_enabled = sys.argv[3] == "yes"
+mapping_enabled = sys.argv[4] == "yes"
+insert_size_enabled = sys.argv[5] == "yes"
+splice_junction_enabled = sys.argv[6] == "yes"
+dropoff_enabled = sys.argv[7] == "yes"
 
 os.makedirs(custom_dir, exist_ok=True)
 
@@ -142,7 +173,7 @@ def df_to_mqc_yaml(df, out_yaml, section_id, section_name, description):
 # Custom tables to include
 # -----------------------------
 
-mapping = read_tsvs(os.path.join(outdir, "mapping", "**", "*.mapping_summary.tsv"))
+mapping = read_tsvs(os.path.join(outdir, "mapping", "**", "*.mapping_summary.tsv")) if mapping_enabled else pd.DataFrame()
 df_to_mqc_yaml(
     mapping,
     os.path.join(custom_dir, "custom_mapping_summary_mqc.yaml"),
@@ -151,7 +182,7 @@ df_to_mqc_yaml(
     "Mapping metrics parsed from STAR Log.final.out by the QC pipeline."
 )
 
-splice = read_tsvs(os.path.join(outdir, "splice_junctions", "**", "*.splice_junction_summary.tsv"))
+splice = read_tsvs(os.path.join(outdir, "splice_junctions", "**", "*.splice_junction_summary.tsv")) if splice_junction_enabled else pd.DataFrame()
 df_to_mqc_yaml(
     splice,
     os.path.join(custom_dir, "custom_splice_junction_summary_mqc.yaml"),
@@ -162,7 +193,7 @@ df_to_mqc_yaml(
 
 splice_read_fractions = read_tsvs(
     os.path.join(outdir, "splice_junctions", "**", "*.splice_read_fraction.tsv")
-)
+) if splice_junction_enabled else pd.DataFrame()
 df_to_mqc_yaml(
     splice_read_fractions,
     os.path.join(custom_dir, "custom_splice_read_fractions_mqc.yaml"),
@@ -172,14 +203,14 @@ df_to_mqc_yaml(
 )
 
 splice_plot = os.path.join(outdir, "splice_junctions", "splice_read_fractions.png")
-if os.path.isfile(splice_plot):
+if splice_junction_enabled and os.path.isfile(splice_plot):
     multiqc_splice_plot = os.path.join(custom_dir, "splice_read_fractions_mqc.png")
     shutil.copy2(splice_plot, multiqc_splice_plot)
     print(f"Wrote: {multiqc_splice_plot}")
 else:
     print("No splice read-fraction plot found; skipping MultiQC image.")
 
-fastqc = read_tsvs(os.path.join(outdir, "fastqc", "**", "*.fastqc_parsed_metrics.tsv"))
+fastqc = read_tsvs(os.path.join(outdir, "fastqc", "**", "*.fastqc_parsed_metrics.tsv")) if fastqc_enabled else pd.DataFrame()
 df_to_mqc_yaml(
     fastqc,
     os.path.join(custom_dir, "custom_fastqc_parsed_metrics_mqc.yaml"),
@@ -190,7 +221,7 @@ df_to_mqc_yaml(
 
 insert_size = read_tsvs(
     os.path.join(outdir, "insert_size_distribution", "**", "*.insert_size_distribution_summary.tsv")
-)
+) if insert_size_enabled else pd.DataFrame()
 df_to_mqc_yaml(
     insert_size,
     os.path.join(custom_dir, "custom_insert_size_distribution_summary_mqc.yaml"),
@@ -206,7 +237,7 @@ df_to_mqc_yaml(
 drop_files = glob.glob(
     os.path.join(outdir, "dropoff", "**", "*.dropoff_profile.tsv"),
     recursive=True
-)
+) if dropoff_enabled else []
 
 drop_rows = []
 

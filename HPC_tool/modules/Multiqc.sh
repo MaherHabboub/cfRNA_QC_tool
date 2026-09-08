@@ -16,6 +16,30 @@ fi
 
 source "$CONFIG"
 
+MODULE_SWITCHES=(
+    FASTQC_ENABLED
+    MAPPING_ENABLED
+    DUPLICATION_ENABLED
+    INSERT_SIZE_ENABLED
+    GENEBODY_ENABLED
+    READ_DISTRIBUTION_ENABLED
+    SPLICE_JUNCTION_ENABLED
+    STRANDEDNESS_ENABLED
+    DROPOFF_ENABLED
+)
+
+for switch_name in "${MODULE_SWITCHES[@]}"; do
+    switch_value="${!switch_name:-yes}"
+    case "$switch_value" in
+        yes|no) ;;
+        *)
+            echo "ERROR: $switch_name must be 'yes' or 'no': $switch_value" >&2
+            exit 1
+            ;;
+    esac
+    printf -v "$switch_name" '%s' "$switch_value"
+done
+
 # -----------------------------
 # Required config variables
 # -----------------------------
@@ -83,7 +107,7 @@ stage_file() {
 # -----------------------------
 # We keep the output report/data, but refresh the staged input.
 echo "Refreshing staged MultiQC input files..."
-find "$MULTIQC_INPUT_DIR" -mindepth 1 -maxdepth 1 -type f -delete 2>/dev/null || true
+find "$MULTIQC_INPUT_DIR" -mindepth 1 -type f -delete 2>/dev/null || true
 mkdir -p "$CUSTOM_DIR"
 
 # -----------------------------
@@ -116,33 +140,47 @@ echo "$MULTIQC_CONFIG"
 # -----------------------------
 echo "Staging recognized QC files..."
 
-# FastQC outputs
-find "$OUTDIR" -type f \( -name "*_fastqc.zip" -o -name "*_fastqc.html" \) | while read -r f
-do
-    stage_file "$f" "$MULTIQC_INPUT_DIR"
-done
+if [[ "$FASTQC_ENABLED" == "yes" ]]; then
+    find "$OUTDIR" -type f \( -name "*_fastqc.zip" -o -name "*_fastqc.html" \) | while read -r f
+    do
+        stage_file "$f" "$MULTIQC_INPUT_DIR"
+    done
+fi
 
-# STAR mapping logs
-find "$OUTDIR" -type f -name "*.Log.final.out" | while read -r f
-do
-    stage_file "$f" "$MULTIQC_INPUT_DIR"
-done
+if [[ "$MAPPING_ENABLED" == "yes" ]]; then
+    find "$OUTDIR" -type f -name "*.Log.final.out" | while read -r f
+    do
+        stage_file "$f" "$MULTIQC_INPUT_DIR"
+    done
+fi
 
-# Picard duplication metrics
-find "$OUTDIR" -type f -name "*.markdup.metrics.txt" | while read -r f
-do
-    stage_file "$f" "$MULTIQC_INPUT_DIR"
-done
+if [[ "$DUPLICATION_ENABLED" == "yes" ]]; then
+    find "$OUTDIR" -type f -name "*.markdup.metrics.txt" | while read -r f
+    do
+        stage_file "$f" "$MULTIQC_INPUT_DIR"
+    done
+fi
 
-# RSeQC outputs
-find "$OUTDIR" -type f \( \
-    -name "*.read_distribution.txt" -o \
-    -name "*_RSeQC_output_all.txt" -o \
-    -name "*.geneBodyCoverage.txt" \
-\) | while read -r f
-do
-    stage_file "$f" "$MULTIQC_INPUT_DIR"
-done
+if [[ "$READ_DISTRIBUTION_ENABLED" == "yes" ]]; then
+    find "$OUTDIR" -type f -name "*.read_distribution.txt" | while read -r f
+    do
+        stage_file "$f" "$MULTIQC_INPUT_DIR"
+    done
+fi
+
+if [[ "$STRANDEDNESS_ENABLED" == "yes" ]]; then
+    find "$OUTDIR" -type f -name "*_RSeQC_output_all.txt" | while read -r f
+    do
+        stage_file "$f" "$MULTIQC_INPUT_DIR"
+    done
+fi
+
+if [[ "$GENEBODY_ENABLED" == "yes" ]]; then
+    find "$OUTDIR" -type f -name "*.geneBodyCoverage.txt" | while read -r f
+    do
+        stage_file "$f" "$MULTIQC_INPUT_DIR"
+    done
+fi
 
 # -----------------------------
 # Stage source custom QC summary tables
@@ -150,19 +188,47 @@ done
 # These are bundled beside the report but may not be parsed directly.
 echo "Staging source custom QC summary tables..."
 
-find "$OUTDIR" -type f \( \
-    -name "*.mapping_summary.tsv" -o \
-    -name "*.duplication_summary.tsv" -o \
-    -name "*.splice_junction_summary.tsv" -o \
-    -name "*.splice_read_fraction.tsv" -o \
-    -name "splice_read_fraction_cohort_summary.tsv" -o \
-    -name "*.insert_size_distribution_summary.tsv" -o \
-    -name "*.fastqc_parsed_metrics.tsv" -o \
-    -name "*.dropoff_profile.tsv" \
-\) | while read -r f
-do
-    stage_file "$f" "$CUSTOM_DIR"
-done
+if [[ "$MAPPING_ENABLED" == "yes" ]]; then
+    find "$OUTDIR" -type f -name "*.mapping_summary.tsv" | while read -r f
+    do
+        stage_file "$f" "$CUSTOM_DIR"
+    done
+fi
+
+if [[ "$DUPLICATION_ENABLED" == "yes" ]]; then
+    find "$OUTDIR" -type f -name "*.duplication_summary.tsv" | while read -r f
+    do
+        stage_file "$f" "$CUSTOM_DIR"
+    done
+fi
+
+if [[ "$SPLICE_JUNCTION_ENABLED" == "yes" ]]; then
+    find "$OUTDIR" -type f \( -name "*.splice_junction_summary.tsv" -o -name "*.splice_read_fraction.tsv" -o -name "splice_read_fraction_cohort_summary.tsv" \) | while read -r f
+    do
+        stage_file "$f" "$CUSTOM_DIR"
+    done
+fi
+
+if [[ "$INSERT_SIZE_ENABLED" == "yes" ]]; then
+    find "$OUTDIR" -type f -name "*.insert_size_distribution_summary.tsv" | while read -r f
+    do
+        stage_file "$f" "$CUSTOM_DIR"
+    done
+fi
+
+if [[ "$FASTQC_ENABLED" == "yes" ]]; then
+    find "$OUTDIR" -type f -name "*.fastqc_parsed_metrics.tsv" | while read -r f
+    do
+        stage_file "$f" "$CUSTOM_DIR"
+    done
+fi
+
+if [[ "$DROPOFF_ENABLED" == "yes" ]]; then
+    find "$OUTDIR" -type f -name "*.dropoff_profile.tsv" | while read -r f
+    do
+        stage_file "$f" "$CUSTOM_DIR"
+    done
+fi
 
 # -----------------------------
 # Stage MultiQC custom content

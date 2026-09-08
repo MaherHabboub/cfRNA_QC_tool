@@ -111,14 +111,22 @@ The HPC workflow includes:
 - Final aggregation of QC metrics.
 
 When enabled, BAM downsampling runs once for the full cohort at the start of
-the workflow. Annotation setup, mapping-statistics parsing, and splice-junction
-summarization also run once for the full cohort. FastQC, duplication, insert
-size distribution, gene body coverage, read distribution, strandedness, and
-exon-intron drop-off run as one job per sample. Only duplication and gene-body
-coverage wait for and use the BAM selected by downsampling; all other modules
-use the original samplesheet BAM. The final MultiQC and aggregation steps use
-`afterany` dependencies so that summary reports can still be generated even if
-one QC module fails.
+the workflow. Annotation setup always runs once. Mapping-statistics parsing and
+splice-junction summarization run once for the full cohort when enabled; FastQC,
+duplication, insert size distribution, gene body coverage, read distribution,
+strandedness, and exon-intron drop-off run as one job per sample when enabled.
+Only duplication and gene-body coverage wait for and use the BAM selected by
+downsampling; all other modules use the original samplesheet BAM. The final
+MultiQC and aggregation steps use `afterany` dependencies so that summary
+reports can still be generated even if one QC module fails.
+
+The nine analysis modules can each be disabled in the config: FastQC, mapping,
+duplication, insert size, gene-body coverage, read distribution, splice
+junctions, strandedness, and drop-off. They default to `yes`; set the matching
+`*_ENABLED` variable to `no` to omit its jobs. GTF-to-BED12, drop-off bin
+creation, MultiQC (including custom content), and aggregation always run.
+MultiQC and aggregation honor the same switches, so old files from a disabled
+module in a reused `OUTDIR` are not included in the current report or summary.
 
 ### HPC Module Reference
 
@@ -127,6 +135,8 @@ per sample read the required FASTQ, BAM, STAR-log, or splice-junction path from
 the corresponding row in `SAMPLESHEET`; their outputs are written below
 `OUTDIR`. The submitter supplies a sample ID for per-sample jobs, but each of
 those modules can also be run manually without a sample ID to process all rows.
+The nine selectable analysis modules use the switches documented below; the
+annotation, reporting, and aggregation modules remain mandatory.
 
 | Module | Required file inputs | Main outputs | Function |
 |---|---|---|---|
@@ -175,6 +185,17 @@ DOWNSAMPLE_TARGET_ALIGNMENTS=1000000
 DOWNSAMPLE_SEED=42
 DOWNSAMPLE_THREADS=4
 
+# Core analysis modules. All default to yes; set any one to no to skip it.
+FASTQC_ENABLED="yes"
+MAPPING_ENABLED="yes"
+DUPLICATION_ENABLED="yes"
+INSERT_SIZE_ENABLED="yes"
+GENEBODY_ENABLED="yes"
+READ_DISTRIBUTION_ENABLED="yes"
+SPLICE_JUNCTION_ENABLED="yes"
+STRANDEDNESS_ENABLED="yes"
+DROPOFF_ENABLED="yes"
+
 SAMPLESHEET="/path/to/samplesheet.tsv"
 
 GTF="/path/to/reference.gtf"
@@ -194,6 +215,11 @@ are not copied or sampled; the manifest records their original BAM as selected.
 For larger BAMs, `samtools view -s` retains an approximately target-sized,
 deterministic subset using `DOWNSAMPLE_SEED`. Set `DOWNSAMPLE_ENABLED="no"` to
 skip the job and run duplication and gene-body coverage on the full BAMs.
+
+All `*_ENABLED` values must be exactly `yes` or `no`; unspecified values default
+to `yes` for existing configs. A disabled module is neither submitted nor read
+by MultiQC or aggregation. The aggregate TSV keeps its existing columns and
+writes `NA` for metrics from disabled modules.
 
 Use absolute paths where possible, especially on HPC systems.
 
