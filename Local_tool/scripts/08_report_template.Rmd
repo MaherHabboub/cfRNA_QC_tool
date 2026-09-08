@@ -10,6 +10,7 @@ output:
 params:
   results_dir: "./results"
   report_title: "Local RNA-seq QC Report"
+  run_manifest: ""
 ---
 
 ```{r setup, include=FALSE}
@@ -26,6 +27,27 @@ suppressPackageStartupMessages({
 })
 
 results_dir <- params$results_dir
+run_manifest <- params$run_manifest
+
+module_enabled <- function(module_name) {
+  if (is.null(run_manifest) || run_manifest == "" || !file.exists(run_manifest)) {
+    return(TRUE)
+  }
+
+  manifest <- data.table::fread(run_manifest)
+
+  if (!all(c("module", "enabled") %in% names(manifest))) {
+    return(TRUE)
+  }
+
+  match_row <- manifest[manifest$module == module_name]
+
+  if (nrow(match_row) != 1) {
+    return(TRUE)
+  }
+
+  isTRUE(match_row$enabled[[1]])
+}
 
 plot_path <- function(...) {
   file.path(results_dir, ...)
@@ -108,209 +130,249 @@ include_png_if_exists(plot_path("norm_log", "qc_density_after_nonzero.png"))
 
 ---
 
-# 3. Biotype distribution QC
-
-This section shows the fraction of raw counts assigned to different gene biotypes.
+```{r biotype-heading, results='asis'}
+if (module_enabled("biotype")) {
+  cat("---\n\n# 3. Biotype distribution QC\n\n")
+  cat("This section shows the fraction of raw counts assigned to different gene biotypes.\n")
+}
+```
 
 ```{r biotype-plot, results='asis', echo=FALSE}
-full_biotype_plot <- plot_path("biotype_qc", "biotype_distribution_percent.png")
-chunk_dir <- plot_path("biotype_qc", "biotype_distribution_chunks")
+if (module_enabled("biotype")) {
+  full_biotype_plot <- plot_path("biotype_qc", "biotype_distribution_percent.png")
+  chunk_dir <- plot_path("biotype_qc", "biotype_distribution_chunks")
 
-if (file.exists(full_biotype_plot)) {
-  cat("\n\n## Biotype distribution plot\n\n")
-  cat(paste0("![](", full_biotype_plot, ")\n\n"))
-} else if (dir.exists(chunk_dir)) {
-  chunk_plots <- list.files(
-    chunk_dir,
-    pattern = "^biotype_distribution_percent_part_.*\\.png$",
-    full.names = TRUE
-  )
-  
-  if (length(chunk_plots) > 0) {
-    chunk_plots <- sort(chunk_plots)
-    
-    cat("\n\n## Biotype distribution plots by sample chunks\n\n")
-    
-    for (plot_file in chunk_plots) {
-      plot_name <- basename(plot_file)
-      part_label <- gsub("^biotype_distribution_percent_", "", plot_name)
-      part_label <- gsub("\\.png$", "", part_label)
-      part_label <- gsub("_", " ", part_label)
-      
-      cat(paste0("\n\n### ", part_label, "\n\n"))
-      cat(paste0("![](", plot_file, ")\n\n"))
+  if (file.exists(full_biotype_plot)) {
+    cat("\n\n## Biotype distribution plot\n\n")
+    cat(paste0("![](", full_biotype_plot, ")\n\n"))
+  } else if (dir.exists(chunk_dir)) {
+    chunk_plots <- list.files(
+      chunk_dir,
+      pattern = "^biotype_distribution_percent_part_.*\\.png$",
+      full.names = TRUE
+    )
+
+    if (length(chunk_plots) > 0) {
+      chunk_plots <- sort(chunk_plots)
+
+      cat("\n\n## Biotype distribution plots by sample chunks\n\n")
+
+      for (plot_file in chunk_plots) {
+        plot_name <- basename(plot_file)
+        part_label <- gsub("^biotype_distribution_percent_", "", plot_name)
+        part_label <- gsub("\\.png$", "", part_label)
+        part_label <- gsub("_", " ", part_label)
+
+        cat(paste0("\n\n### ", part_label, "\n\n"))
+        cat(paste0("![](", plot_file, ")\n\n"))
+      }
+    } else {
+      cat("*No biotype distribution plots were found.*\n")
     }
   } else {
-    cat("*No biotype distribution plots were found.*\n")
+    cat(paste0("*Missing plot:* `", full_biotype_plot, "`\n"))
   }
-} else {
-  cat(paste0("*Missing plot:* `", full_biotype_plot, "`\n"))
 }
 ```
 
 ```{r biotype-table}
-show_table_if_exists(
-  plot_path("biotype_qc", "biotype_distribution_counts_and_fraction.tsv"),
-  "Biotype distribution table"
-)
+if (module_enabled("biotype")) {
+  show_table_if_exists(
+    plot_path("biotype_qc", "biotype_distribution_counts_and_fraction.tsv"),
+    "Biotype distribution table"
+  )
+}
 ```
 
 ---
 
-# 4. PCA on top variable genes
-
-The PCA is calculated from the log-normalized expression matrix using the top variable genes.
-
-## PCA scatter plot
-
-```{r pca-scatter, fig.align='center', out.width='90%'}
-include_png_if_exists(plot_path("pca", "pca_scatter_PC1_PC2.png"))
+```{r pca-heading, results='asis'}
+if (module_enabled("pca_ssgsea")) {
+  cat("# 4. PCA on top variable genes\n\n")
+  cat("The PCA is calculated from the log-normalized expression matrix using the top variable genes.\n")
+}
 ```
 
-## Scree plot
-
-```{r pca-scree, fig.align='center', out.width='80%'}
-include_png_if_exists(plot_path("pca", "pca_scree.png"))
+```{r pca-scatter, fig.align='center', out.width='90%', results='asis'}
+if (module_enabled("pca_ssgsea")) {
+  cat("## PCA scatter plot\n\n")
+  include_png_if_exists(plot_path("pca", "pca_scatter_PC1_PC2.png"))
+}
 ```
-## PCA plots colored by sample metadata
+
+```{r pca-scree, fig.align='center', out.width='80%', results='asis'}
+if (module_enabled("pca_ssgsea")) {
+  cat("## Scree plot\n\n")
+  include_png_if_exists(plot_path("pca", "pca_scree.png"))
+}
+```
 
 ```{r pca-metadata-plots, results='asis', echo=FALSE}
-metadata_plot_dir <- plot_path("pca", "metadata_plots")
+if (module_enabled("pca_ssgsea")) {
+  metadata_plot_dir <- plot_path("pca", "metadata_plots")
 
-if (dir.exists(metadata_plot_dir)) {
-  metadata_plots <- list.files(
-    metadata_plot_dir,
-    pattern = "^pca_scatter_PC1_PC2_by_.*\\.png$",
-    full.names = TRUE
-  )
-  
-  if (length(metadata_plots) > 0) {
-    metadata_plots <- sort(metadata_plots)
+  if (dir.exists(metadata_plot_dir)) {
+    metadata_plots <- list.files(
+      metadata_plot_dir,
+      pattern = "^pca_scatter_PC1_PC2_by_.*\\.png$",
+      full.names = TRUE
+    )
     
-    for (plot_file in metadata_plots) {
-      plot_name <- basename(plot_file)
-      plot_label <- gsub("^pca_scatter_PC1_PC2_by_", "", plot_name)
-      plot_label <- gsub("\\.png$", "", plot_label)
-      plot_label <- gsub("_", " ", plot_label)
-      
-      cat(paste0("\n\n### Colored by ", plot_label, "\n\n"))
-      cat(paste0("![](", plot_file, ")\n\n"))
+    if (length(metadata_plots) > 0) {
+      metadata_plots <- sort(metadata_plots)
+      cat("## PCA plots colored by sample metadata\n\n")
+
+      for (plot_file in metadata_plots) {
+        plot_name <- basename(plot_file)
+        plot_label <- gsub("^pca_scatter_PC1_PC2_by_", "", plot_name)
+        plot_label <- gsub("\\.png$", "", plot_label)
+        plot_label <- gsub("_", " ", plot_label)
+
+        cat(paste0("\n\n### Colored by ", plot_label, "\n\n"))
+        cat(paste0("![](", plot_file, ")\n\n"))
+      }
+    } else {
+      cat("*No metadata-colored PCA plots were generated.*\n")
     }
   } else {
     cat("*No metadata-colored PCA plots were generated.*\n")
   }
-} else {
-  cat("*No metadata-colored PCA plots were generated.*\n")
 }
 ```
 
-## PCA variance explained
-
-```{r pca-var-table}
-show_table_if_exists(
-  plot_path("pca", "pca_variance_explained.tsv"),
-  "PCA variance explained"
-)
+```{r pca-var-table, results='asis'}
+if (module_enabled("pca_ssgsea")) {
+  cat("## PCA variance explained\n\n")
+  show_table_if_exists(
+    plot_path("pca", "pca_variance_explained.tsv"),
+    "PCA variance explained"
+  )
+}
 ```
 
 ---
 
-# 5. Gene-set contamination scores
-
-This section reports ssGSEA scores for platelet, erythroid/hemolysis, and endothelial marker sets.
-
-## ssGSEA score versus PC correlation heatmap
-
-```{r ssgsea-pc-heatmap, fig.align='center', out.width='100%'}
-include_png_if_exists(plot_path("gene_set_qc", "ssgsea", "ssgsea_score_pc_correlation_heatmap.png"))
+```{r ssgsea-heading, results='asis'}
+if (module_enabled("pca_ssgsea")) {
+  cat("# 5. Gene-set contamination scores\n\n")
+  cat("This section reports ssGSEA scores for platelet, erythroid/hemolysis, and endothelial marker sets.\n")
+}
 ```
 
-## Platelet score vs PC1
-
-```{r platelet-pc1, fig.align='center', out.width='80%'}
-include_png_if_exists(plot_path("gene_set_qc", "ssgsea", "platelet_score_vs_PC1_ssgsea.png"))
+```{r ssgsea-pc-heatmap, fig.align='center', out.width='100%', results='asis'}
+if (module_enabled("pca_ssgsea")) {
+  cat("## ssGSEA score versus PC correlation heatmap\n\n")
+  include_png_if_exists(plot_path("gene_set_qc", "ssgsea", "ssgsea_score_pc_correlation_heatmap.png"))
+}
 ```
 
-## Erythroid/hemolysis score vs PC1
-
-```{r erythroid-pc1, fig.align='center', out.width='80%'}
-include_png_if_exists(plot_path("gene_set_qc", "ssgsea", "erythroid_score_vs_PC1_ssgsea.png"))
+```{r platelet-pc1, fig.align='center', out.width='80%', results='asis'}
+if (module_enabled("pca_ssgsea")) {
+  cat("## Platelet score vs PC1\n\n")
+  include_png_if_exists(plot_path("gene_set_qc", "ssgsea", "platelet_score_vs_PC1_ssgsea.png"))
+}
 ```
 
-## Endothelial score vs PC1
-
-```{r endothelial-pc1, fig.align='center', out.width='80%'}
-include_png_if_exists(plot_path("gene_set_qc", "ssgsea", "endothelial_score_vs_PC1_ssgsea.png"))
+```{r erythroid-pc1, fig.align='center', out.width='80%', results='asis'}
+if (module_enabled("pca_ssgsea")) {
+  cat("## Erythroid/hemolysis score vs PC1\n\n")
+  include_png_if_exists(plot_path("gene_set_qc", "ssgsea", "erythroid_score_vs_PC1_ssgsea.png"))
+}
 ```
 
-## ssGSEA scores table
-
-```{r ssgsea-score-table}
-show_table_if_exists(
-  plot_path("gene_set_qc", "ssgsea", "ssgsea_scores.tsv"),
-  "ssGSEA scores"
-)
+```{r endothelial-pc1, fig.align='center', out.width='80%', results='asis'}
+if (module_enabled("pca_ssgsea")) {
+  cat("## Endothelial score vs PC1\n\n")
+  include_png_if_exists(plot_path("gene_set_qc", "ssgsea", "endothelial_score_vs_PC1_ssgsea.png"))
+}
 ```
 
-## Marker matching statistics
+```{r ssgsea-score-table, results='asis'}
+if (module_enabled("pca_ssgsea")) {
+  cat("## ssGSEA scores table\n\n")
+  show_table_if_exists(
+    plot_path("gene_set_qc", "ssgsea", "ssgsea_scores.tsv"),
+    "ssGSEA scores"
+  )
+}
+```
 
-```{r ssgsea-marker-stats}
-show_table_if_exists(
-  plot_path("gene_set_qc", "ssgsea", "ssgsea_marker_match_stats.tsv"),
-  "Marker matching statistics"
-)
+```{r ssgsea-marker-stats, results='asis'}
+if (module_enabled("pca_ssgsea")) {
+  cat("## Marker matching statistics\n\n")
+  show_table_if_exists(
+    plot_path("gene_set_qc", "ssgsea", "ssgsea_marker_match_stats.tsv"),
+    "Marker matching statistics"
+  )
+}
 ```
 
 ---
 
-# 6. Sex chromosome QC
-
-This section visualizes XIST expression versus the mean expression of a small Y-linked gene panel.
+```{r sex-heading, results='asis'}
+if (module_enabled("sex_inference")) {
+  cat("# 6. Sex chromosome QC\n\n")
+  cat("This section visualizes XIST expression versus the mean expression of a small Y-linked gene panel.\n")
+}
+```
 
 ```{r sex-scatter, fig.align='center', out.width='80%'}
-include_png_if_exists(plot_path("sex_inference", "sex_inference_scatter.png"))
+if (module_enabled("sex_inference")) {
+  include_png_if_exists(plot_path("sex_inference", "sex_inference_scatter.png"))
+}
 ```
 
 ```{r sex-scores}
-show_table_if_exists(
-  plot_path("sex_inference", "sex_inference_scores.tsv"),
-  "Sex chromosome QC scores"
-)
+if (module_enabled("sex_inference")) {
+  show_table_if_exists(
+    plot_path("sex_inference", "sex_inference_scores.tsv"),
+    "Sex chromosome QC scores"
+  )
+}
 ```
 
 ```{r sex-marker-stats}
-show_table_if_exists(
-  plot_path("sex_inference", "sex_inference_marker_match_stats.tsv"),
-  "Sex chromosome marker matching statistics"
-)
+if (module_enabled("sex_inference")) {
+  show_table_if_exists(
+    plot_path("sex_inference", "sex_inference_marker_match_stats.tsv"),
+    "Sex chromosome marker matching statistics"
+  )
+}
 ```
 
 ---
 
-# 7. HPC QC metric correlation with expression PCs
-
-This section compares upstream HPC-derived QC metrics against expression PCs.
-
-## HPC QC metric-PC correlation heatmap
-
-```{r hpc-pc-heatmap, fig.align='center', out.width='100%'}
-include_png_if_exists(plot_path("hpc_metric_pc_qc", "hpc_qc_pc_correlation_heatmap.png"))
+```{r hpc-heading, results='asis'}
+if (module_enabled("hpc_metric")) {
+  cat("# 7. HPC QC metric correlation with expression PCs\n\n")
+  cat("This section compares upstream HPC-derived QC metrics against expression PCs.\n")
+}
 ```
 
-```{r hpc-cor-table}
-show_table_if_exists(
-  plot_path("hpc_metric_pc_qc", "hpc_qc_pc_correlations.tsv"),
-  "HPC QC metric-PC correlations"
-)
+```{r hpc-pc-heatmap, fig.align='center', out.width='100%', results='asis'}
+if (module_enabled("hpc_metric")) {
+  cat("## HPC QC metric-PC correlation heatmap\n\n")
+  include_png_if_exists(plot_path("hpc_metric_pc_qc", "hpc_qc_pc_correlation_heatmap.png"))
+}
 ```
 
-## Z-scored HPC QC metrics
+```{r hpc-cor-table, results='asis'}
+if (module_enabled("hpc_metric")) {
+  show_table_if_exists(
+    plot_path("hpc_metric_pc_qc", "hpc_qc_pc_correlations.tsv"),
+    "HPC QC metric-PC correlations"
+  )
+}
+```
 
-```{r hpc-z-table}
-show_table_if_exists(
-  plot_path("hpc_metric_pc_qc", "hpc_qc_metrics_zscore.tsv"),
-  "Z-scored HPC QC metrics"
-)
+```{r hpc-z-table, results='asis'}
+if (module_enabled("hpc_metric")) {
+  cat("## Z-scored HPC QC metrics\n\n")
+  show_table_if_exists(
+    plot_path("hpc_metric_pc_qc", "hpc_qc_metrics_zscore.tsv"),
+    "Z-scored HPC QC metrics"
+  )
+}
 ```
 
 ---

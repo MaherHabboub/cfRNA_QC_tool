@@ -334,23 +334,29 @@ The repository includes a master runner:
 Local_tool/scripts/run_all_local_qc.R
 ```
 
-This script is designed to run all local QC steps in order and record pass/fail
-status. In the current script, internal paths refer to `./r_scripts/...`, so run
-it from a working directory where `r_scripts` points to the local scripts, or
-adjust those paths before use.
+This script runs the existing local QC scripts in order, records pass/fail or
+skipped status, and renders the HTML report. It resolves bundled scripts and
+resources from its own repository location, so it can be run from any working
+directory.
+
+Create a personal configuration by copying:
+
+```text
+Local_tool/config/local_qc_config.example.R
+```
+
+Set `COUNTS` and `OUT_ROOT`. `METADATA` and `HPC_SUMMARY` are optional. The
+config exposes `BIOTYPE_ENABLED`, `PCA_SSGSEA_ENABLED`, and
+`SEX_INFERENCE_ENABLED`; all default to `TRUE`. Normalization always runs.
+`PCA_SSGSEA_ENABLED=FALSE` skips both PCA and ssGSEA. HPC metric correlation
+runs only when `HPC_SUMMARY` is non-empty and PCA is enabled. The generated HTML
+report omits sections for disabled modules.
 
 Example command:
 
 ```bash
 Rscript Local_tool/scripts/run_all_local_qc.R \
-  --counts /path/to/count_matrix.tsv \
-  --metadata /path/to/sample_metadata.tsv \
-  --ensembl /path/to/hsapiens_gene_biotypes.tsv \
-  --panglao /path/to/PanglaoDB_markers_27_Mar_2020.tsv \
-  --sex_panel /path/to/sex_qc_panel_XIST_plus_5Y.tsv \
-  --hpc_summary /path/to/hpc_qc_summary.tsv \
-  --out_root /path/to/local_qc_results \
-  --report_title "Local cfRNA QC Report"
+  --config /path/to/local_qc_config.R
 ```
 
 ## Outputs
