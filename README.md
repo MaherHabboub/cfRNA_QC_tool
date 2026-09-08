@@ -326,7 +326,7 @@ Rscript Local_tool/scripts/08_generate_html_report.R \
   --title "Local cfRNA QC Report"
 ```
 
-### Run the Local Master Script
+### Configure the Local Workflow
 
 The repository includes a master runner:
 
@@ -345,6 +345,13 @@ Create a personal configuration by copying:
 Local_tool/config/local_qc_config.example.R
 ```
 
+For example:
+
+```bash
+cp Local_tool/config/local_qc_config.example.R \
+  /path/to/local_qc_config.R
+```
+
 Set `COUNTS` and `OUT_ROOT`. `METADATA` and `HPC_SUMMARY` are optional. The
 config exposes `BIOTYPE_ENABLED`, `PCA_SSGSEA_ENABLED`, and
 `SEX_INFERENCE_ENABLED`; all default to `TRUE`. Normalization always runs.
@@ -352,12 +359,29 @@ config exposes `BIOTYPE_ENABLED`, `PCA_SSGSEA_ENABLED`, and
 runs only when `HPC_SUMMARY` is non-empty and PCA is enabled. The generated HTML
 report omits sections for disabled modules.
 
-Example command:
+### Launch from a Terminal
 
 ```bash
 Rscript Local_tool/scripts/run_all_local_qc.R \
   --config /path/to/local_qc_config.R
 ```
+
+### Launch from RStudio
+
+For users who prefer not to use a terminal, open this launcher in RStudio:
+
+```text
+Local_tool/launch_local_qc_from_rstudio.R
+```
+
+At the top of the file, set:
+
+- `local_tool_dir` to the `Local_tool` directory in your cloned repository.
+- `config_path` to your edited personal local-QC configuration file.
+
+Then click **Source** in RStudio. The launcher invokes the same master runner
+as the terminal command, so it produces the same run logs, module manifest, and
+HTML report. It uses the R installation currently open in RStudio.
 
 ## Outputs
 
