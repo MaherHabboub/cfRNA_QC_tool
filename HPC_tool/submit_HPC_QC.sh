@@ -42,6 +42,7 @@ READ_DISTRIBUTION_ENABLED="${READ_DISTRIBUTION_ENABLED:-yes}"
 SPLICE_JUNCTION_ENABLED="${SPLICE_JUNCTION_ENABLED:-yes}"
 STRANDEDNESS_ENABLED="${STRANDEDNESS_ENABLED:-yes}"
 DROPOFF_ENABLED="${DROPOFF_ENABLED:-yes}"
+KRAKEN_ENABLED="${KRAKEN_ENABLED:-yes}"
 
 if [[ ! "$FASTQC_THREADS" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: FASTQC_THREADS must be a positive integer: $FASTQC_THREADS" >&2
@@ -66,6 +67,7 @@ MODULE_SWITCHES=(
     SPLICE_JUNCTION_ENABLED
     STRANDEDNESS_ENABLED
     DROPOFF_ENABLED
+    KRAKEN_ENABLED
 )
 
 for switch_name in "${MODULE_SWITCHES[@]}"; do
@@ -447,6 +449,22 @@ do
         qc_jobs+=("$strand_job")
     fi
 
+    if [[ "$KRAKEN_ENABLED" == "yes" ]]; then
+        kraken_job=$(
+        submit_step \
+            "12" \
+            "kraken_${SAMPLE}" \
+            "Kraken.sh" \
+            "04:00:00" \
+            "90G" \
+            "4" \
+            "afterok" \
+            "$bins_job" \
+            "$SAMPLE"
+        )
+        qc_jobs+=("$kraken_job")
+    fi
+
 done < <(tail -n +2 "$SAMPLESHEET")
 
 # ============================================================
@@ -489,7 +507,7 @@ qc_dep="$(IFS=:; echo "${qc_jobs[*]}")"
 
 multiqc_job=$(
 submit_step \
-    "12" \
+    "13" \
     "multiqc" \
     "Multiqc.sh" \
     "02:00:00" \
@@ -501,7 +519,7 @@ submit_step \
 
 aggregate_job=$(
 submit_step \
-    "13" \
+    "14" \
     "aggregate" \
     "Aggregate.sh" \
     "01:00:00" \

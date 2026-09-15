@@ -26,6 +26,7 @@ MODULE_SWITCHES=(
     SPLICE_JUNCTION_ENABLED
     STRANDEDNESS_ENABLED
     DROPOFF_ENABLED
+    KRAKEN_ENABLED
 )
 
 for switch_name in "${MODULE_SWITCHES[@]}"; do
@@ -228,6 +229,20 @@ if [[ "$DROPOFF_ENABLED" == "yes" ]]; then
     do
         stage_file "$f" "$CUSTOM_DIR"
     done
+fi
+
+if [[ "$KRAKEN_ENABLED" == "yes" ]]; then
+    if [[ -d "$OUTDIR/kraken" ]]; then
+        find "$OUTDIR/kraken" -type f \( \
+            -name "*.microbial_summary.tsv" -o \
+            -name "*.top_genera.tsv" -o \
+            -name "*.top_species.tsv" -o \
+            -name "visualization_manifest.tsv" \
+        \) | while read -r f
+        do
+            stage_file "$f" "$CUSTOM_DIR"
+        done
+    fi
 fi
 
 # -----------------------------

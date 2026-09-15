@@ -125,6 +125,7 @@ assert_contains 'read_distribution_sample_01' "$CALL_LOG"
 assert_contains 'splice_junction' "$CALL_LOG"
 assert_contains 'strandedness_sample_01' "$CALL_LOG"
 assert_contains 'dropoff_sample_01' "$CALL_LOG"
+assert_contains 'kraken_sample_01' "$CALL_LOG"
 
 : > "$CALL_LOG"
 OUTDIR_PATH="${TEST_TMP}/out"
@@ -137,7 +138,8 @@ write_config "${TEST_TMP}/disabled_config.sh" \
     'READ_DISTRIBUTION_ENABLED="no"' \
     'SPLICE_JUNCTION_ENABLED="no"' \
     'STRANDEDNESS_ENABLED="no"' \
-    'DROPOFF_ENABLED="no"'
+    'DROPOFF_ENABLED="no"' \
+    'KRAKEN_ENABLED="no"'
 run_submitter "${TEST_TMP}/disabled_config.sh"
 assert_contains 'gtf_to_bed12' "$CALL_LOG"
 assert_contains 'make_dropoff_bins' "$CALL_LOG"
@@ -153,6 +155,7 @@ assert_not_contains 'read_distribution_sample_01' "$CALL_LOG"
 assert_not_contains 'splice_junction' "$CALL_LOG"
 assert_not_contains 'strandedness_sample_01' "$CALL_LOG"
 assert_not_contains 'dropoff_sample_01' "$CALL_LOG"
+assert_not_contains 'kraken_sample_01' "$CALL_LOG"
 
 OUTDIR_PATH="${TEST_TMP}/out"
 write_config "${TEST_TMP}/invalid_config.sh" 'FASTQC_ENABLED="maybe"'
@@ -161,6 +164,13 @@ if PATH="${FAKE_BIN}:$PATH" bash "$SUBMITTER" "${TEST_TMP}/invalid_config.sh" >"
     exit 1
 fi
 assert_contains "FASTQC_ENABLED must be 'yes' or 'no'" "${TEST_TMP}/invalid.out"
+
+write_config "${TEST_TMP}/invalid_kraken_config.sh" 'KRAKEN_ENABLED="maybe"'
+if PATH="${FAKE_BIN}:$PATH" bash "$SUBMITTER" "${TEST_TMP}/invalid_kraken_config.sh" >"${TEST_TMP}/invalid_kraken.out" 2>&1; then
+    echo "Expected invalid Kraken config to fail" >&2
+    exit 1
+fi
+assert_contains "KRAKEN_ENABLED must be 'yes' or 'no'" "${TEST_TMP}/invalid_kraken.out"
 
 # A stale mapping file must not be staged when mapping is disabled, while an
 # enabled FastQC file remains available to MultiQC.
@@ -181,7 +191,8 @@ write_config "${TEST_TMP}/report_config.sh" \
     'READ_DISTRIBUTION_ENABLED="no"' \
     'SPLICE_JUNCTION_ENABLED="no"' \
     'STRANDEDNESS_ENABLED="no"' \
-    'DROPOFF_ENABLED="no"'
+    'DROPOFF_ENABLED="no"' \
+    'KRAKEN_ENABLED="no"'
 PATH="${FAKE_BIN}:$SYSTEM_PATH" bash "${TOOL_DIR}/modules/Multiqc.sh" "${TEST_TMP}/report_config.sh" >/dev/null
 [[ -f "${OUTDIR_PATH}/multiqc/multiqc_input/sample_01_fastqc.html" ]] || {
     echo "Expected enabled FastQC fixture to be staged" >&2
@@ -215,7 +226,8 @@ if PATH="$SYSTEM_PATH" command -v python >/dev/null 2>&1 && PATH="$SYSTEM_PATH" 
         'READ_DISTRIBUTION_ENABLED="no"' \
         'SPLICE_JUNCTION_ENABLED="no"' \
         'STRANDEDNESS_ENABLED="no"' \
-        'DROPOFF_ENABLED="no"'
+        'DROPOFF_ENABLED="no"' \
+        'KRAKEN_ENABLED="no"'
     PATH="$SYSTEM_PATH:${FAKE_BIN}" bash "${TOOL_DIR}/modules/Aggregate.sh" "${TEST_TMP}/aggregate_config.sh" >/dev/null
     aggregate_value="$(awk -F '\t' 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "uniquely_mapped_pct") c = i } NR == 2 { print $c }' "${OUTDIR_PATH}/summary/hpc_qc_summary.tsv")"
     [[ "$aggregate_value" == "NA" ]] || {

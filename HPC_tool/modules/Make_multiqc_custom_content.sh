@@ -16,6 +16,12 @@ fi
 
 source "$CONFIG"
 
+KRAKEN_TOP_GENERA="${KRAKEN_TOP_GENERA:-15}"
+if ! [[ "$KRAKEN_TOP_GENERA" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: KRAKEN_TOP_GENERA must be a positive integer: $KRAKEN_TOP_GENERA" >&2
+    exit 1
+fi
+
 MODULE_SWITCHES=(
     FASTQC_ENABLED
     MAPPING_ENABLED
@@ -26,6 +32,7 @@ MODULE_SWITCHES=(
     SPLICE_JUNCTION_ENABLED
     STRANDEDNESS_ENABLED
     DROPOFF_ENABLED
+    KRAKEN_ENABLED
 )
 
 for switch_name in "${MODULE_SWITCHES[@]}"; do
@@ -44,6 +51,7 @@ done
 # Required config variables
 # -----------------------------
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
+: "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
 
 # -----------------------------
 # Paths
@@ -62,24 +70,32 @@ find "$CUSTOM_MQC_DIR" -type f -delete 2>/dev/null || true
 echo "Creating MultiQC custom content..."
 echo "Custom content folder: $CUSTOM_MQC_DIR"
 
-python - "$OUTDIR" "$CUSTOM_MQC_DIR" \
+python - "$OUTDIR" "$CUSTOM_MQC_DIR" "$SAMPLESHEET" \
     "$FASTQC_ENABLED" "$MAPPING_ENABLED" "$INSERT_SIZE_ENABLED" \
-    "$SPLICE_JUNCTION_ENABLED" "$DROPOFF_ENABLED" <<'PY'
+    "$SPLICE_JUNCTION_ENABLED" "$DROPOFF_ENABLED" "$KRAKEN_ENABLED" \
+    "$KRAKEN_TOP_GENERA" <<'PY'
 import sys
 import os
 import glob
 import shutil
 import pandas as pd
 import math
+import csv
 import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 outdir = sys.argv[1]
 custom_dir = sys.argv[2]
-fastqc_enabled = sys.argv[3] == "yes"
-mapping_enabled = sys.argv[4] == "yes"
-insert_size_enabled = sys.argv[5] == "yes"
-splice_junction_enabled = sys.argv[6] == "yes"
-dropoff_enabled = sys.argv[7] == "yes"
+samplesheet_path = sys.argv[3]
+fastqc_enabled = sys.argv[4] == "yes"
+mapping_enabled = sys.argv[5] == "yes"
+insert_size_enabled = sys.argv[6] == "yes"
+splice_junction_enabled = sys.argv[7] == "yes"
+dropoff_enabled = sys.argv[8] == "yes"
+kraken_enabled = sys.argv[9] == "yes"
+kraken_top_genera = int(sys.argv[10])
 
 os.makedirs(custom_dir, exist_ok=True)
 
@@ -414,6 +430,240 @@ if insert_size_plot_files:
     print(f"Wrote combined insert size distribution image: {out_png}")
 else:
     print("No insert size distribution histogram PNGs found; skipping combined insert size distribution plot.")
+
+# -----------------------------
+# Kraken2 microbial-screening visualizations
+# -----------------------------
+# Per-sample classification is performed by Kraken.sh. Cohort summaries and
+# figures are generated here because this script is called immediately before
+# MultiQC stages its custom content.
+
+if kraken_enabled:
+    kraken_results = os.path.join(outdir, "kraken", "results")
+    kraken_visualizations = os.path.join(outdir, "kraken", "visualizations")
+    os.makedirs(kraken_visualizations, exist_ok=True)
+
+    try:
+        sample_metadata = pd.read_csv(samplesheet_path, sep="\t", dtype=str)
+        required_metadata = {"sample_id", "layout", "condition"}
+        if not required_metadata.issubset(sample_metadata.columns):
+            missing = sorted(required_metadata.difference(sample_metadata.columns))
+            raise ValueError("Samplesheet is missing Kraken metadata columns: " + ", ".join(missing))
+        if sample_metadata["sample_id"].duplicated().any():
+            raise ValueError("Samplesheet contains duplicate sample IDs")
+
+        summary_frames = []
+        taxa_frames = []
+        unavailable = []
+        for _, metadata in sample_metadata.iterrows():
+            sample = str(metadata["sample_id"])
+            sample_dir = os.path.join(kraken_results, sample)
+            summary_file = os.path.join(sample_dir, sample + ".microbial_summary.tsv")
+            taxa_file = os.path.join(sample_dir, sample + ".all_taxa.tsv")
+            if not (os.path.isfile(summary_file) and os.path.getsize(summary_file) > 0
+                    and os.path.isfile(taxa_file) and os.path.getsize(taxa_file) > 0):
+                unavailable.append(sample)
+                continue
+            summary = pd.read_csv(summary_file, sep="\t")
+            taxa = pd.read_csv(taxa_file, sep="\t")
+            if len(summary) != 1:
+                raise ValueError("Expected one Kraken summary row for " + sample)
+            summary["sample"] = sample
+            summary["layout"] = str(metadata["layout"])
+            summary["condition"] = str(metadata["condition"])
+            taxa["sample"] = sample
+            taxa["layout"] = str(metadata["layout"])
+            taxa["condition"] = str(metadata["condition"])
+            summary_frames.append(summary)
+            taxa_frames.append(taxa)
+
+        if unavailable:
+            print("WARNING: Kraken outputs unavailable for: " + ", ".join(unavailable))
+        if not summary_frames:
+            print("No completed Kraken outputs found; skipping Kraken custom content.")
+        else:
+            summary = pd.concat(summary_frames, ignore_index=True)
+            taxa = pd.concat(taxa_frames, ignore_index=True)
+            sample_order = summary["sample"].tolist()
+            numeric_summary = ["total_input_fragments", "star_unmapped_fragments",
+                               "kraken_classified_fragments", "kraken_unclassified_fragments",
+                               "residual_human_fragments", "bacterial_fragments",
+                               "archaeal_fragments", "viral_fragments", "fungal_fragments",
+                               "other_classified_fragments"]
+            numeric_taxa = ["clade_fragments", "direct_fragments", "minimizers",
+                            "distinct_minimizers", "taxid"]
+            for column in numeric_summary:
+                summary[column] = pd.to_numeric(summary[column], errors="raise")
+            for column in numeric_taxa:
+                taxa[column] = pd.to_numeric(taxa[column], errors="raise")
+
+            summary["star_mapped_fragments"] = (
+                summary["total_input_fragments"] - summary["star_unmapped_fragments"]
+            )
+            categories = ["STAR mapped", "Residual human", "Bacteria", "Archaea",
+                          "Viruses", "Fungi", "Other classified", "Unclassified"]
+            colors = {"STAR mapped": "#4E79A7", "Residual human": "#9C755F",
+                      "Bacteria": "#59A14F", "Archaea": "#B07AA1",
+                      "Viruses": "#E15759", "Fungi": "#F28E2B",
+                      "Other classified": "#A0A0A0", "Unclassified": "#D9D9D9"}
+            domain_colors = {key: colors[key] for key in ["Bacteria", "Archaea", "Viruses", "Fungi"]}
+            full_counts = pd.DataFrame({
+                "STAR mapped": summary["star_mapped_fragments"].to_numpy(),
+                "Residual human": summary["residual_human_fragments"].to_numpy(),
+                "Bacteria": summary["bacterial_fragments"].to_numpy(),
+                "Archaea": summary["archaeal_fragments"].to_numpy(),
+                "Viruses": summary["viral_fragments"].to_numpy(),
+                "Fungi": summary["fungal_fragments"].to_numpy(),
+                "Other classified": summary["other_classified_fragments"].to_numpy(),
+                "Unclassified": summary["kraken_unclassified_fragments"].to_numpy(),
+            }, index=sample_order)
+            full_percentages = full_counts.div(summary.set_index("sample")["total_input_fragments"], axis=0) * 100.0
+            unmapped_percentages = full_counts.drop(columns=["STAR mapped"]).div(
+                summary.set_index("sample")["star_unmapped_fragments"], axis=0
+            ).replace([np.inf, -np.inf], 0).fillna(0) * 100.0
+
+            taxa["fpm_total"] = taxa["clade_fragments"] / taxa["sample"].map(
+                summary.set_index("sample")["total_input_fragments"]
+            ) * 1_000_000.0
+            genera = taxa.loc[(taxa["rank"] == "G") & taxa["microbial_domain"].isin(domain_colors)
+                              & (taxa["clade_fragments"] > 0)].copy()
+            top_count = kraken_top_genera
+            selected = pd.DataFrame()
+            genus_matrix = pd.DataFrame()
+            if not genera.empty:
+                metadata = (genera.groupby(["taxid", "name", "microbial_domain"], as_index=False)
+                            .agg(total_fpm=("fpm_total", "sum"))
+                            .sort_values(["total_fpm", "name"], ascending=[False, True]).head(top_count))
+                metadata["taxon_label"] = metadata["name"]
+                duplicate_names = metadata["name"].duplicated(keep=False)
+                metadata.loc[duplicate_names, "taxon_label"] = (
+                    metadata.loc[duplicate_names, "name"] + " [" +
+                    metadata.loc[duplicate_names, "taxid"].astype(str) + "]")
+                selected = genera.merge(
+                    metadata[["taxid", "name", "microbial_domain", "total_fpm", "taxon_label"]],
+                    on=["taxid", "name", "microbial_domain"], how="inner")
+                selected = selected.groupby(["sample", "taxid", "name", "taxon_label", "microbial_domain", "total_fpm"], as_index=False).agg(
+                    fpm_total=("fpm_total", "sum"), clade_fragments=("clade_fragments", "sum"),
+                    distinct_minimizers=("distinct_minimizers", "sum"))
+                ordered = metadata.sort_values(["total_fpm", "name"], ascending=[True, True])["taxon_label"].tolist()
+                genus_matrix = selected.pivot_table(index="taxon_label", columns="sample", values="fpm_total", aggfunc="sum", fill_value=0.0).reindex(index=ordered, columns=sample_order, fill_value=0.0)
+
+            summary.to_csv(os.path.join(kraken_visualizations, "kraken_summary.tsv"), sep="\t", index=False, quoting=csv.QUOTE_MINIMAL)
+            taxa.to_csv(os.path.join(kraken_visualizations, "kraken_taxa_long.tsv"), sep="\t", index=False, quoting=csv.QUOTE_MINIMAL)
+            genus_matrix.to_csv(os.path.join(kraken_visualizations, "kraken_top_genera_fpm_matrix.tsv"), sep="\t", index=True, index_label="genus")
+
+            def draw_stacked(ax, frame, title):
+                bottom = np.zeros(len(frame))
+                for category in frame.columns:
+                    values = frame[category].to_numpy(dtype=float)
+                    ax.bar(np.arange(len(frame)), values, bottom=bottom, label=category,
+                           color=colors[category], edgecolor="white", linewidth=0.4)
+                    bottom += values
+                ax.set_title(title, fontweight="bold")
+                ax.set_ylim(0, 100)
+                ax.set_ylabel("Percentage (%)")
+                ax.set_xticks(np.arange(len(frame)))
+                ax.set_xticklabels(sample_order, rotation=25, ha="right")
+                ax.grid(axis="y", alpha=0.3)
+                ax.set_axisbelow(True)
+                ax.legend(frameon=False, fontsize=7, ncol=2, loc="upper left", bbox_to_anchor=(1.01, 1.0))
+
+            markers = ["o", "s", "^", "D", "P", "X", "v", "<", ">", "*"]
+
+            def draw_top_genera(ax, title):
+                if selected.empty or genus_matrix.empty:
+                    ax.text(0.5, 0.5, "No microbial genera were reported", ha="center", va="center")
+                    ax.set_title(title, fontweight="bold")
+                    ax.set_axis_off()
+                    return
+                taxa_order = list(genus_matrix.index)
+                y_lookup = {taxon: index for index, taxon in enumerate(taxa_order)}
+                offsets = [0.0] if len(sample_order) == 1 else np.linspace(-0.25, 0.25, len(sample_order))
+                max_distinct = max(float(selected["distinct_minimizers"].max()), 1.0)
+                for sample_index, sample in enumerate(sample_order):
+                    sample_rows = selected.loc[selected["sample"] == sample].set_index("taxon_label")
+                    for taxon in taxa_order:
+                        if taxon in sample_rows.index:
+                            row = sample_rows.loc[taxon]
+                            if isinstance(row, pd.DataFrame):
+                                row = row.iloc[0]
+                            fpm, distinct, domain = float(row["fpm_total"]), float(row["distinct_minimizers"]), str(row["microbial_domain"])
+                        else:
+                            fpm, distinct = 0.0, 0.0
+                            domain = str(selected.loc[selected["taxon_label"] == taxon, "microbial_domain"].iloc[0])
+                        size = 28.0 + 92.0 * (math.log10(distinct + 1.0) / math.log10(max_distinct + 1.0))
+                        ax.scatter(math.log10(fpm + 1.0), y_lookup[taxon] + offsets[sample_index],
+                                   s=size, marker=markers[sample_index % len(markers)], color=domain_colors[domain],
+                                   edgecolor="#222222", linewidth=0.5, alpha=0.85 if fpm > 0 else 0.18)
+                ax.set_title(title, fontweight="bold")
+                ax.set_xlabel("log10(genus fragments per million total + 1)")
+                ax.set_yticks(range(len(taxa_order)))
+                ax.set_yticklabels(taxa_order, fontsize=8)
+                ax.grid(axis="x", alpha=0.3)
+                ax.set_axisbelow(True)
+                handles = [Patch(facecolor=color, edgecolor="#222222", label=domain) for domain, color in domain_colors.items()]
+                handles += [Line2D([], [], linestyle="None", marker=markers[index % len(markers)], markerfacecolor="#B5B5B5", markeredgecolor="#222222", label=sample) for index, sample in enumerate(sample_order)]
+                ax.legend(handles=handles, frameon=False, fontsize=7, loc="upper left", bbox_to_anchor=(1.01, 1.0))
+
+            evidence = taxa.loc[taxa["rank"].isin(["G", "S"]) & taxa["microbial_domain"].isin(domain_colors) & (taxa["clade_fragments"] > 0)]
+
+            def draw_evidence(ax, title):
+                for domain, color in domain_colors.items():
+                    for rank, marker in [("G", "o"), ("S", "^")]:
+                        part = evidence.loc[(evidence["microbial_domain"] == domain) & (evidence["rank"] == rank)]
+                        ax.scatter(np.log10(part["clade_fragments"] + 1), np.log10(part["distinct_minimizers"] + 1), color=color, marker=marker, s=32, alpha=0.7, edgecolor="#222222", linewidth=0.3)
+                ax.set_title(title, fontweight="bold")
+                ax.set_xlabel("log10(clade fragments + 1)")
+                ax.set_ylabel("log10(distinct minimizers + 1)")
+                ax.grid(alpha=0.3)
+                ax.legend(handles=[Patch(facecolor=color, label=domain) for domain, color in domain_colors.items()] + [Line2D([], [], marker="o", linestyle="None", color="#555555", label="Genus"), Line2D([], [], marker="^", linestyle="None", color="#555555", label="Species")], frameon=False, fontsize=7)
+
+            def save_kraken_figure(fig, stem):
+                output = os.path.join(kraken_visualizations, stem + ".png")
+                fig.savefig(output, dpi=300, bbox_inches="tight")
+                plt.close(fig)
+                shutil.copy2(output, os.path.join(custom_dir, stem + "_mqc.png"))
+
+            fig, axes = plt.subplots(2, 2, figsize=(19, 14), constrained_layout=True)
+            draw_stacked(axes[0, 0], full_percentages, "A. Complete-library composition")
+            draw_stacked(axes[0, 1], unmapped_percentages, "B. STAR-unmapped composition")
+            draw_top_genera(axes[1, 0], "C. Top microbial genera")
+            draw_evidence(axes[1, 1], "D. Fragment and minimizer evidence")
+            fig.suptitle("Kraken2 screening of STAR-unmapped reads", fontsize=16, fontweight="bold")
+            save_kraken_figure(fig, "kraken_visualization_overview")
+
+            fig, ax = plt.subplots(figsize=(max(8.0, 1.35 * len(sample_order) + 4.0), 6.0), constrained_layout=True)
+            draw_stacked(ax, full_percentages, "Complete-library composition")
+            save_kraken_figure(fig, "01_total_library_composition")
+            fig, ax = plt.subplots(figsize=(max(8.0, 1.35 * len(sample_order) + 4.0), 6.0), constrained_layout=True)
+            draw_stacked(ax, unmapped_percentages, "Composition of STAR-unmapped reads")
+            save_kraken_figure(fig, "02_star_unmapped_composition")
+            fig, ax = plt.subplots(figsize=(11.5, max(6.0, 0.42 * max(len(genus_matrix.index), 1) + 2.0)), constrained_layout=True)
+            draw_top_genera(ax, "Top microbial genera")
+            save_kraken_figure(fig, "03_top_genera_dotplot")
+            fig, ax = plt.subplots(figsize=(10.5, 7.0), constrained_layout=True)
+            draw_evidence(ax, "Taxonomic support: fragments versus distinct minimizers")
+            save_kraken_figure(fig, "04_taxon_evidence")
+
+            with open(os.path.join(kraken_visualizations, "visualization_manifest.tsv"), "w", encoding="utf-8", newline="") as handle:
+                writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+                writer.writerow(["output", "description"])
+                writer.writerows([
+                    ("kraken_summary.tsv", "Combined sample-level Kraken QC metrics"),
+                    ("kraken_taxa_long.tsv", "Combined long-format taxonomic table"),
+                    ("kraken_top_genera_fpm_matrix.tsv", "Top-genus fragments-per-million matrix"),
+                    ("01_total_library_composition.png", "Complete-library composition"),
+                    ("02_star_unmapped_composition.png", "Composition within STAR-unmapped reads"),
+                    ("03_top_genera_dotplot.png", "Top genera normalized per million total input fragments"),
+                    ("04_taxon_evidence.png", "Clade-fragment versus distinct-minimizer evidence"),
+                    ("kraken_visualization_overview.png", "Four-panel Kraken2 overview"),
+                ])
+
+            table_columns = ["sample", "condition", "layout", "unmapped_percent_total", "classified_percent_unmapped", "microbial_percent_total", "microbial_percent_unmapped", "top_genus", "top_species"]
+            df_to_mqc_yaml(summary[table_columns], os.path.join(custom_dir, "custom_kraken_microbiome_summary_mqc.yaml"), "custom_kraken_microbiome_summary", "Kraken2 Microbial Screen Summary", "Kraken2 classification of STAR-unmapped reads. The overview plot and source tables are staged with this MultiQC report.")
+            print("Wrote Kraken2 cohort visualizations: " + kraken_visualizations)
+    except Exception as error:
+        print("WARNING: Could not create Kraken2 MultiQC custom content: " + str(error))
 
 print("Done creating MultiQC custom content.")
 PY

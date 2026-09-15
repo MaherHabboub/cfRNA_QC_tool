@@ -30,6 +30,16 @@ READ_DISTRIBUTION_ENABLED="yes"
 SPLICE_JUNCTION_ENABLED="yes"
 STRANDEDNESS_ENABLED="yes"
 DROPOFF_ENABLED="yes"
+# Kraken2 microbial screening of STAR-unmapped reads. Both SE and PE samples
+# are supported; PE samples require STAR's Unmapped.out.mate1 and mate2 files.
+KRAKEN_ENABLED="yes"
+
+# The following retain the tested HPC Kraken2 installation and cfRNA database.
+# Override them when using the tool on another HPC system.
+KRAKEN_CONFIG="/scratch/gent/vo/000/gvo00027/tools/kraken/config.sh"
+KRAKEN_DB="/scratch/gent/vo/000/gvo00027/tools/kraken/database/cfrna_k2_bacteria_archaea_viral_human_fungi_20260828_full"
+KRAKEN_TOP_TAXA=20
+KRAKEN_TOP_GENERA=15
 
 # Input manifest. Its optional ninth column, transcriptome_bam, selects the
 # transcriptome insert-size method for that sample.

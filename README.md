@@ -107,6 +107,7 @@ The HPC workflow includes:
 - STAR splice junction summary.
 - RSeQC strandedness inference.
 - Exon-intron drop-off analysis.
+- Kraken2 microbial screening of STAR-unmapped reads.
 - MultiQC report generation.
 - Final aggregation of QC metrics.
 
@@ -120,9 +121,9 @@ downsampling; all other modules use the original samplesheet BAM. The final
 MultiQC and aggregation steps use `afterany` dependencies so that summary
 reports can still be generated even if one QC module fails.
 
-The nine analysis modules can each be disabled in the config: FastQC, mapping,
+The ten analysis modules can each be disabled in the config: FastQC, mapping,
 duplication, insert size, gene-body coverage, read distribution, splice
-junctions, strandedness, and drop-off. They default to `yes`; set the matching
+junctions, strandedness, drop-off, and Kraken2 microbial screening. They default to `yes`; set the matching
 `*_ENABLED` variable to `no` to omit its jobs. GTF-to-BED12, drop-off bin
 creation, MultiQC (including custom content), and aggregation always run.
 MultiQC and aggregation honor the same switches, so old files from a disabled
@@ -135,7 +136,7 @@ per sample read the required FASTQ, BAM, STAR-log, or splice-junction path from
 the corresponding row in `SAMPLESHEET`; their outputs are written below
 `OUTDIR`. The submitter supplies a sample ID for per-sample jobs, but each of
 those modules can also be run manually without a sample ID to process all rows.
-The nine selectable analysis modules use the switches documented below; the
+The ten selectable analysis modules use the switches documented below; the
 annotation, reporting, and aggregation modules remain mandatory.
 
 | Module | Required file inputs | Main outputs | Function |
@@ -153,6 +154,7 @@ annotation, reporting, and aggregation modules remain mandatory.
 | `Splice_Junction.sh` | Samplesheet `bam`, `sj_tab`, and `condition`; optional `star_log` | Per-sample STAR junction summary and spliced-read-fraction TSVs in `splice_junctions/<sample>/`; cohort `splice_read_fractions.tsv`, condition summary TSV, PNG, and PDF in `splice_junctions/` | Summarizes STAR junction support and, from primary MAPQ ≥30 BAM alignments, compares the fraction of reads that cross one or more splice junctions across sample conditions. The condition PNG is included in MultiQC. |
 | `Strandedness.sh` | Samplesheet `bam`; config `EXON_BED` | `strandedness/<sample>/<sample>_RSeQC_output_all.txt` and `_RSeQC_output.txt` | Runs RSeQC library-orientation inference and writes a compact strandedness result. |
 | `Dropoff.sh` | Samplesheet `bam`; generated `annotation/exon_intron_bins/exon_intron_bins.bed` | `dropoff/<sample>/` bin-coverage TSV, normalized drop-off profile TSV, and PNG | Counts split-read coverage across exon–intron boundary bins and visualizes normalized exon-to-intron drop-off. |
+| `Kraken.sh` | Samplesheet `star_log`; STAR `Unmapped.out.mate1` (and `Unmapped.out.mate2` for `PE`) | `kraken/results/<sample>/` Kraken report, compressed per-fragment calls, microbial summary, and taxon TSVs | Classifies STAR-unmapped reads against the configured Kraken2 database. Single-end samples use mate 1; paired-end samples use mate 1 and mate 2 with Kraken2 paired mode after matching-record validation. Cohort plots and the MultiQC section are created by `Make_multiqc_custom_content.sh`. |
 | `Make_multiqc_custom_content.sh` | Existing QC TSV/PNG outputs under `OUTDIR` | `multiqc/custom_content/` MultiQC YAML tables, compact drop-off TSV, and combined PNGs | Converts pipeline-specific metrics and plots into MultiQC custom-content files. It is called automatically by `Multiqc.sh`. |
 | `Multiqc.sh` | Existing QC outputs under `OUTDIR`; `Make_multiqc_custom_content.sh` | `multiqc/hpc_qc_multiqc_report.html`, report-data directory, staged input, and config files | Stages standard and custom outputs, then generates the combined MultiQC report. |
 | `Aggregate.sh` | `SAMPLESHEET`; existing mapping, FastQC, duplication, insert-size, read-distribution, and splice-junction outputs; optional MultiQC report | `summary/hpc_qc_summary.tsv` and `summary/hpc_qc_transfer_bundle.zip` | Combines selected sample-level QC metrics, including the insert-size coordinate system, into one TSV and packages it with the MultiQC report/data for transfer. |
@@ -195,6 +197,13 @@ READ_DISTRIBUTION_ENABLED="yes"
 SPLICE_JUNCTION_ENABLED="yes"
 STRANDEDNESS_ENABLED="yes"
 DROPOFF_ENABLED="yes"
+KRAKEN_ENABLED="yes"
+
+# Tested Kraken2 installation and cfRNA database. Override on another cluster.
+KRAKEN_CONFIG="/path/to/kraken/config.sh"
+KRAKEN_DB="/path/to/kraken2_database"
+KRAKEN_TOP_TAXA=20
+KRAKEN_TOP_GENERA=15
 
 SAMPLESHEET="/path/to/samplesheet.tsv"
 
@@ -218,8 +227,16 @@ skip the job and run duplication and gene-body coverage on the full BAMs.
 
 All `*_ENABLED` values must be exactly `yes` or `no`; unspecified values default
 to `yes` for existing configs. A disabled module is neither submitted nor read
-by MultiQC or aggregation. The aggregate TSV keeps its existing columns and
+by MultiQC or aggregation where applicable. The aggregate TSV keeps its existing columns and
 writes `NA` for metrics from disabled modules.
+
+Kraken2 reads its database and module-loader paths from `KRAKEN_DB` and
+`KRAKEN_CONFIG`. The example values point to the tested HPC installation; users
+on another system must provide paths to their own Kraken2 installation and
+database. `KRAKEN_TOP_TAXA` controls the number of per-sample genus/species rows
+retained, while `KRAKEN_TOP_GENERA` controls the cohort visualisation. For `PE`
+samples, STAR must have produced both `Unmapped.out.mate1` and
+`Unmapped.out.mate2` in the directory containing that sample's `star_log`.
 
 Use absolute paths where possible, especially on HPC systems.
 
