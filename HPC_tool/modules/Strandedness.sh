@@ -34,6 +34,12 @@ RESULT_DIR="${OUTDIR}/strandedness"
 # -----------------------------
 module purge
 module load RSeQC/5.0.1-foss-2023a
+module load SAMtools
+
+command -v samtools >/dev/null 2>&1 || {
+    echo "ERROR: samtools is unavailable after loading SAMtools." >&2
+    exit 1
+}
 
 # -----------------------------
 # Validate prerequisites
@@ -61,6 +67,16 @@ do
     if [[ ! -f "$BAM" ]]; then
         echo "WARNING: BAM not found for $SAMPLE, skipping"
         continue
+    fi
+
+    samtools quickcheck -v "$BAM" || {
+        echo "ERROR: BAM failed samtools quickcheck for $SAMPLE: $BAM" >&2
+        exit 1
+    }
+
+    if ! samtools view -H "$BAM" | awk '$1 == "@SQ" {found=1} END {exit !found}'; then
+        echo "ERROR: BAM header contains no @SQ reference-sequence records for $SAMPLE: $BAM" >&2
+        exit 1
     fi
 
     SAMPLE_OUTDIR="${RESULT_DIR}/${SAMPLE}"

@@ -139,6 +139,11 @@ while IFS= read -r SAMPLE_LINE; do
         exit 1
     }
 
+    if ! samtools view -H "$BAM" | awk '$1 == "@SQ" {found=1} END {exit !found}'; then
+        echo "ERROR: BAM header contains no @SQ reference-sequence records for $SAMPLE: $BAM" >&2
+        exit 1
+    fi
+
     COUNTS="$({
         samtools view -F 3844 -q "$MAPQ_MIN" "$BAM" |
         awk 'BEGIN {total=0; nonsplice=0; splice=0}

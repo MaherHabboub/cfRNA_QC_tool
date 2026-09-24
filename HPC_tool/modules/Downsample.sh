@@ -106,6 +106,10 @@ do
     fi
 
     samtools quickcheck -v "$BAM"
+    if ! samtools view -H "$BAM" | awk '$1 == "@SQ" {found=1} END {exit !found}'; then
+        echo "ERROR: BAM header contains no @SQ reference-sequence records for $SAMPLE: $BAM" >&2
+        exit 1
+    fi
     original_count="$(samtools view -@ "$DOWNSAMPLE_THREADS" -c "$BAM")"
 
     selected_bam="$BAM"

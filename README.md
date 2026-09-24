@@ -129,6 +129,31 @@ creation, MultiQC (including custom content), and aggregation always run.
 MultiQC and aggregation honor the same switches, so old files from a disabled
 module in a reused `OUTDIR` are not included in the current report or summary.
 
+### Alignment-input compatibility
+
+The workflow distinguishes STAR-specific files from generic alignment files.
+`Map.sh` requires STAR `Log.final.out`; the STAR junction-table component of
+`Splice_Junction.sh` requires `SJ.out.tab`; `Insert_Size_Distribution_Transcriptome.sh`
+requires a STAR transcriptome-coordinate BAM; and `Kraken.sh` requires STAR
+unmapped FASTQ output (plus the STAR final log). Those modules cannot be
+substituted with outputs from another aligner without adding an aligner-specific
+adapter.
+
+The BAM-driven portions of downsampling, duplication, genomic insert-size,
+gene-body coverage, read distribution, strandedness, drop-off, and the
+BAM-derived spliced-read fraction are aligner-agnostic. They accept valid BAMs
+from common aligners such as STAR, HISAT2, and Bowtie2. The workflow validates
+the BAM with `samtools quickcheck` and requires normal `@SQ` reference records.
+For duplication, gene-body coverage, read distribution, and drop-off, an input
+not declared coordinate-sorted is sorted temporarily in the module output
+directory; the original BAM is not changed.
+
+The BAM reference sequence names and genome build must still match the GTF,
+BED12, exon BED, and drop-off bins. For example, a BAM using `1`/`2` chromosome
+names is not compatible with annotations using `chr1`/`chr2` until one side is
+made consistent. This is a reference-compatibility requirement, not a
+STAR-specific one.
+
 ### HPC Module Reference
 
 Every module receives the config file as its first argument. Modules that work
@@ -141,19 +166,19 @@ annotation, reporting, and aggregation modules remain mandatory.
 
 | Module | Required file inputs | Main outputs | Function |
 |---|---|---|---|
-| `Downsample.sh` | Samplesheet `bam` | `downsampled_bams/downsampling_manifest.tsv`; downsampled BAMs only for samples above the target | Uses deterministic `samtools view -s` sampling to retain approximately the configured alignment target. Samples at or below the target retain their original BAM path in the manifest. Only duplication and gene-body coverage use the selected BAM. |
+| `Downsample.sh` | Valid BAM with `@SQ` header records | `downsampled_bams/downsampling_manifest.tsv`; downsampled BAMs only for samples above the target | Uses deterministic `samtools view -s` sampling to retain approximately the configured alignment target. Samples at or below the target retain their original BAM path in the manifest. Only duplication and gene-body coverage use the selected BAM. |
 | `GTF_to_BED12.sh` | Config `GTF` | `annotation/<gtf-prefix>.genePred`, `.bed12.bed`, and `annotation/BED12.path.txt` | Converts the reference GTF to validated BED12 annotation for RSeQC. The path-record file tells downstream modules the exact BED12 filename generated. |
 | `Make_Dropoff_Bins.sh` | Config `GTF` | `annotation/exon_intron_bins/exon_intron_bins.bed` and the raw transcript-level bin BED | Builds deduplicated 50 bp exon- and intron-side bins around exon–intron boundaries for drop-off QC. |
 | `Fastqc.sh` | Samplesheet `fastq_r1`; also `fastq_r2` for `PE` samples | `fastqc/raw/<sample>/` FastQC HTML/ZIP reports and `<sample>.fastqc_parsed_metrics.tsv` | Runs FastQC and extracts last-10-base quality, minimum positional quality, GC peak, and maximum adapter content. |
 | `Map.sh` | Samplesheet `star_log` | `mapping/<sample>/<sample>.Log.final.out` and `.mapping_summary.tsv` | Copies the STAR final log and extracts mapping, multimapping, and unmapped-read metrics. |
-| `Duplication.sh` | Samplesheet `bam` | `duplication/<sample>/<sample>.markdup.metrics.txt` and `.duplication_summary.tsv` | Runs Picard MarkDuplicates and records the alignment-based duplicate fraction. |
+| `Duplication.sh` | Valid BAM with `@SQ` header records | `duplication/<sample>/<sample>.markdup.metrics.txt` and `.duplication_summary.tsv` | Runs Picard MarkDuplicates and records the alignment-based duplicate fraction. A non-coordinate-sorted input is sorted temporarily. |
 | `Insert_Size_Distribution_Genomic.sh` | Samplesheet `bam` for `PE` samples without `transcriptome_bam` | `insert_size_distribution/<sample>/` histogram TSV, summary TSV, and histogram PNG | Uses genomic-coordinate paired-end spans to derive insert sizes and summarize cfRNA-relevant size windows and 167 bp peak enrichment. |
 | `Insert_Size_Distribution_Transcriptome.sh` | Samplesheet `transcriptome_bam` for `PE` samples | The same `insert_size_distribution/<sample>/` layout, plus classification and ambiguous-pair-example TSVs | Uses STAR transcript-coordinate alignments. It collapses placements by original read pair, accepts one distinct absolute TLEN, and excludes pairs with conflicting transcript-placement lengths. |
-| `Genebody.sh` | Samplesheet `bam`; generated `annotation/BED12.path.txt` and referenced BED12 | `gene_body_coverage/<sample>.geneBodyCoverage.txt` and RSeQC companion outputs | Builds a BAM index and runs RSeQC gene-body coverage to assess 5′–3′ coverage bias. |
-| `Read_Distribution.sh` | Samplesheet `bam`; generated `annotation/BED12.path.txt` and referenced BED12 | `read_distribution/<sample>/<sample>.read_distribution.txt` | Runs RSeQC feature distribution to quantify reads in CDS exons, UTR exons, introns, and intergenic regions. |
-| `Splice_Junction.sh` | Samplesheet `bam`, `sj_tab`, and `condition`; optional `star_log` | Per-sample STAR junction summary and spliced-read-fraction TSVs in `splice_junctions/<sample>/`; cohort `splice_read_fractions.tsv`, condition summary TSV, PNG, and PDF in `splice_junctions/` | Summarizes STAR junction support and, from primary MAPQ ≥30 BAM alignments, compares the fraction of reads that cross one or more splice junctions across sample conditions. The condition PNG is included in MultiQC. |
-| `Strandedness.sh` | Samplesheet `bam`; config `EXON_BED` | `strandedness/<sample>/<sample>_RSeQC_output_all.txt` and `_RSeQC_output.txt` | Runs RSeQC library-orientation inference and writes a compact strandedness result. |
-| `Dropoff.sh` | Samplesheet `bam`; generated `annotation/exon_intron_bins/exon_intron_bins.bed` | `dropoff/<sample>/` bin-coverage TSV, normalized drop-off profile TSV, and PNG | Counts split-read coverage across exon–intron boundary bins and visualizes normalized exon-to-intron drop-off. |
+| `Genebody.sh` | Valid BAM; generated `annotation/BED12.path.txt` and referenced BED12 | `gene_body_coverage/<sample>.geneBodyCoverage.txt` and RSeQC companion outputs | Builds a BAM index and runs RSeQC gene-body coverage to assess 5′–3′ coverage bias. A non-coordinate-sorted input is sorted temporarily. |
+| `Read_Distribution.sh` | Valid BAM; generated `annotation/BED12.path.txt` and referenced BED12 | `read_distribution/<sample>/<sample>.read_distribution.txt` | Runs RSeQC feature distribution to quantify reads in CDS exons, UTR exons, introns, and intergenic regions. A non-coordinate-sorted input is sorted temporarily. |
+| `Splice_Junction.sh` | Valid BAM and `condition`; optional STAR `sj_tab` and `star_log` | Per-sample optional STAR junction summary plus BAM-derived spliced-read-fraction TSVs in `splice_junctions/<sample>/`; cohort fraction TSV, condition summary, PNG, and PDF | The STAR junction summary is produced only when `SJ.out.tab` is supplied. Independently, the module calculates the fraction of primary, mapped, non-duplicate, QC-passing BAM alignments with MAPQ ≥30 that cross a splice junction. |
+| `Strandedness.sh` | Valid BAM; config `EXON_BED` | `strandedness/<sample>/<sample>_RSeQC_output_all.txt` and `_RSeQC_output.txt` | Runs RSeQC library-orientation inference and writes a compact strandedness result. |
+| `Dropoff.sh` | Valid BAM; generated `annotation/exon_intron_bins/exon_intron_bins.bed` | `dropoff/<sample>/` bin-coverage TSV, normalized drop-off profile TSV, and PNG | Counts split-read coverage across exon–intron boundary bins and visualizes normalized exon-to-intron drop-off. A non-coordinate-sorted input is sorted temporarily for `bedtools coverage -sorted`. |
 | `Kraken.sh` | Samplesheet `star_log`; STAR `Unmapped.out.mate1` (and `Unmapped.out.mate2` for `PE`) | `kraken/results/<sample>/` Kraken report, compressed per-fragment calls, microbial summary, and taxon TSVs | Classifies STAR-unmapped reads against the configured Kraken2 database. Single-end samples use mate 1; paired-end samples use mate 1 and mate 2 with Kraken2 paired mode after matching-record validation. Cohort plots and the MultiQC section are created by `Make_multiqc_custom_content.sh`. |
 | `Make_multiqc_custom_content.sh` | Existing QC TSV/PNG outputs under `OUTDIR` | `multiqc/custom_content/` MultiQC YAML tables, compact drop-off TSV, and combined PNGs | Converts pipeline-specific metrics and plots into MultiQC custom-content files. It is called automatically by `Multiqc.sh`. |
 | `Multiqc.sh` | Existing QC outputs under `OUTDIR`; `Make_multiqc_custom_content.sh` | `multiqc/hpc_qc_multiqc_report.html`, report-data directory, staged input, and config files | Stages standard and custom outputs, then generates the combined MultiQC report. |
@@ -252,6 +277,14 @@ sample_02	/path/S2_R1.fastq.gz	/path/S2_R2.fastq.gz	/path/S2.bam	/path/S2.Log.fi
 
 For single-end data, use the layout value expected by the modules and leave
 unused paired-end fields consistently filled according to your local convention.
+
+For a non-STAR alignment workflow, retain the columns and provide the BAM in
+`bam`, but set `MAPPING_ENABLED="no"` and `KRAKEN_ENABLED="no"`. The `star_log`
+and `sj_tab` fields may then be `NA`; `Splice_Junction.sh` will still calculate
+its BAM-derived spliced-read fraction, but will omit the optional STAR
+junction-table summary. Do not supply a non-STAR BAM in `transcriptome_bam`:
+the transcriptome insert-size method is explicitly a STAR transcriptome-BAM
+method, so use the genomic insert-size method instead.
 
 `transcriptome_bam` is an optional ninth column used only for Insert Size
 Distribution. Existing eight-column samplesheets remain valid and use the

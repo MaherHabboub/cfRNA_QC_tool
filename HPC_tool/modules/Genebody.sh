@@ -45,7 +45,13 @@ DOWNSAMPLE_MANIFEST="${OUTDIR}/downsampled_bams/downsampling_manifest.tsv"
 # -----------------------------
 module purge
 module load picard/3.0.0-Java-17
+module load SAMtools
 module load RSeQC/5.0.1-foss-2023a
+
+command -v samtools >/dev/null 2>&1 || {
+    echo "ERROR: samtools is unavailable after loading SAMtools." >&2
+    exit 1
+}
 
 # -----------------------------
 # Validate prerequisites
@@ -113,16 +119,40 @@ do
         continue
     fi
 
+    samtools quickcheck -v "$QC_BAM" || {
+        echo "ERROR: BAM failed samtools quickcheck for $SAMPLE: $QC_BAM" >&2
+        exit 1
+    }
+
+    if ! samtools view -H "$QC_BAM" | awk '$1 == "@SQ" {found=1} END {exit !found}'; then
+        echo "ERROR: BAM header contains no @SQ reference-sequence records for $SAMPLE: $QC_BAM" >&2
+        exit 1
+    fi
+
     PREFIX="${RESULT_DIR}/${SAMPLE}"
+    SORTED_INPUT=""
+    INPUT_BAM="$QC_BAM"
+    sort_order="$(samtools view -H "$QC_BAM" | awk '$1 == "@HD" {for (i = 1; i <= NF; i++) if ($i ~ /^SO:/) {print substr($i, 4); exit}}')"
+
+    if [[ "$sort_order" != "coordinate" ]]; then
+        SORTED_INPUT="${RESULT_DIR}/${SAMPLE}.coordinate_sorted.tmp.bam"
+        echo "Input BAM is not declared coordinate-sorted (SO=${sort_order:-unspecified}); creating a temporary coordinate-sorted BAM."
+        java -jar "$EBROOTPICARD/picard.jar" SortSam \
+          I="$QC_BAM" \
+          O="$SORTED_INPUT" \
+          SORT_ORDER=coordinate \
+          VALIDATION_STRINGENCY=SILENT
+        INPUT_BAM="$SORTED_INPUT"
+    fi
 
     echo "[1/2] Building BAM index..."
-    echo "Input BAM: $QC_BAM"
+    echo "Input BAM: $INPUT_BAM"
 
     java -jar "$EBROOTPICARD/picard.jar" BuildBamIndex \
-      I="$QC_BAM" \
-      O="${QC_BAM}.bai"
+      I="$INPUT_BAM" \
+      O="${INPUT_BAM}.bai"
 
-    test -f "${QC_BAM}.bai"
+    test -f "${INPUT_BAM}.bai"
 
     echo "[2/2] Running RSeQC geneBody_coverage..."
 
@@ -130,7 +160,7 @@ do
 
     geneBody_coverage.py \
       -r "$BED12" \
-      -i "$QC_BAM" \
+      -i "$INPUT_BAM" \
       -o "$PREFIX"
 
     rc=$?
@@ -139,8 +169,11 @@ do
 
     if [[ $rc -ne 0 && ! -f "${PREFIX}.geneBodyCoverage.txt" ]]; then
         echo "WARNING: geneBody_coverage failed for $SAMPLE"
+        [[ -z "$SORTED_INPUT" ]] || rm -f "$SORTED_INPUT" "${SORTED_INPUT}.bai"
         continue
     fi
+
+    [[ -z "$SORTED_INPUT" ]] || rm -f "$SORTED_INPUT" "${SORTED_INPUT}.bai"
 
     echo "Done: $SAMPLE"
 

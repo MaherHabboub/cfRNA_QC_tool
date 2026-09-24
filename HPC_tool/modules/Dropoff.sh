@@ -73,6 +73,16 @@ do
         continue
     fi
 
+    samtools quickcheck -v "$BAM" || {
+        echo "ERROR: BAM failed samtools quickcheck for $SAMPLE: $BAM" >&2
+        exit 1
+    }
+
+    if ! samtools view -H "$BAM" | awk '$1 == "@SQ" {found=1} END {exit !found}'; then
+        echo "ERROR: BAM header contains no @SQ reference-sequence records for $SAMPLE: $BAM" >&2
+        exit 1
+    fi
+
     SAMPLE_OUTDIR="${RESULT_DIR}/${SAMPLE}"
     mkdir -p "$SAMPLE_OUTDIR"
 
@@ -83,6 +93,16 @@ do
     GENOME_FILE="${SAMPLE_OUTDIR}/${SAMPLE}.genome_from_bam.tsv"
     FILTERED_BINS="${SAMPLE_OUTDIR}/${SAMPLE}.exon_intron_bins.filtered.bed"
     SORTED_BINS="${SAMPLE_OUTDIR}/${SAMPLE}.exon_intron_bins.sorted.bed"
+    SORTED_INPUT=""
+    INPUT_BAM="$BAM"
+    sort_order="$(samtools view -H "$BAM" | awk '$1 == "@HD" {for (i = 1; i <= NF; i++) if ($i ~ /^SO:/) {print substr($i, 4); exit}}')"
+
+    if [[ "$sort_order" != "coordinate" ]]; then
+        SORTED_INPUT="${SAMPLE_OUTDIR}/${SAMPLE}.coordinate_sorted.tmp.bam"
+        echo "Input BAM is not declared coordinate-sorted (SO=${sort_order:-unspecified}); creating a temporary coordinate-sorted BAM."
+        samtools sort -o "$SORTED_INPUT" "$BAM"
+        INPUT_BAM="$SORTED_INPUT"
+    fi
 
     echo "Creating genome file from BAM header..."
 
@@ -129,7 +149,7 @@ do
 
     bedtools coverage \
       -a "$SORTED_BINS" \
-      -b "$BAM" \
+      -b "$INPUT_BAM" \
       -split \
       -sorted \
       -g "$GENOME_FILE" \
@@ -240,6 +260,8 @@ plt.savefig(
     dpi=200
 )
 PY
+
+    [[ -z "$SORTED_INPUT" ]] || rm -f "$SORTED_INPUT"
 
     echo "Done: $SAMPLE"
 
