@@ -22,7 +22,7 @@ source "$CONFIG"
 # -----------------------------
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
-FASTQC_THREADS="${FASTQC_THREADS:-2}"
+FASTQC_THREADS="${SLURM_CPUS_PER_TASK:-2}"
 
 # -----------------------------
 # Paths

@@ -4,8 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-SUBMITTER="${TOOL_DIR}/submit_HPC_QC.sh"
 TEST_TMP="$(mktemp -d)"
+# Never generate wrappers or logs in the working repository during tests.
+cp -R "$TOOL_DIR" "${TEST_TMP}/HPC_tool"
+TOOL_DIR="${TEST_TMP}/HPC_tool"
+SUBMITTER="${TOOL_DIR}/submit_HPC_QC.sh"
 FAKE_BIN="${TEST_TMP}/bin"
 CALL_LOG="${TEST_TMP}/sbatch_calls.tsv"
 JOB_COUNTER="${TEST_TMP}/job_counter"
@@ -67,6 +70,11 @@ write_samplesheet() {
         $'sample_id\tfastq_r1\tfastq_r2\tbam\tstar_log\tsj_tab\tlayout\tcondition' \
         $'sample_01\tr1.fastq.gz\tr2.fastq.gz\tsample.bam\tsample.Log.final.out\tsample.SJ.out.tab\tPE\tCONTROL' \
         > "${TEST_TMP}/samples.tsv"
+    touch "${TEST_TMP}/r1.fastq.gz" "${TEST_TMP}/r2.fastq.gz" \
+        "${TEST_TMP}/sample.bam" "${TEST_TMP}/sample.Log.final.out" \
+        "${TEST_TMP}/sample.SJ.out.tab" "${TEST_TMP}/reference.gtf" \
+        "${TEST_TMP}/exons.bed" "${TEST_TMP}/sample_01.Unmapped.out.mate1" \
+        "${TEST_TMP}/sample_01.Unmapped.out.mate2"
 }
 
 write_config() {
@@ -76,13 +84,15 @@ write_config() {
     printf '%s\n' \
         'CLUSTER_MODULE=""' \
         'CLUSTER_ENV_MODULE=""' \
-        'FASTQC_THREADS=2' \
+        'STAR_ENABLED="no"' \
+        'HTSEQ_ENABLED="no"' \
         'DOWNSAMPLE_ENABLED="no"' \
         'DOWNSAMPLE_TARGET_ALIGNMENTS=1000000' \
         'DOWNSAMPLE_SEED=42' \
-        'DOWNSAMPLE_THREADS=4' \
         "SAMPLESHEET=\"${TEST_TMP}/samples.tsv\"" \
         "OUTDIR=\"${OUTDIR_PATH}\"" \
+        "GTF=\"${TEST_TMP}/reference.gtf\"" \
+        "EXON_BED=\"${TEST_TMP}/exons.bed\"" \
         "$@" \
         > "$config_path"
 }

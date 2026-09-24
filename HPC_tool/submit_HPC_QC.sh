@@ -26,13 +26,22 @@ mkdir -p "$WRAPPER_DIR" "$LOG_DIR"
 
 source "$CONFIG"
 
+# Slurm resource settings belong to the submitter. Edit these allocations here;
+# modules take their thread counts from SLURM_CPUS_PER_TASK.
+FASTQC_THREADS=2
+DOWNSAMPLE_THREADS=4
+STAR_THREADS=8
+STAR_MEM="60G"
+STAR_TIME="36:00:00"
+HTSEQ_THREADS=1
+HTSEQ_MEM="60G"
+HTSEQ_TIME="36:00:00"
+
 : "${OUTDIR:?ERROR: OUTDIR not set in config}"
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set in config}"
-FASTQC_THREADS="${FASTQC_THREADS:-2}"
 DOWNSAMPLE_ENABLED="${DOWNSAMPLE_ENABLED:-yes}"
 DOWNSAMPLE_TARGET_ALIGNMENTS="${DOWNSAMPLE_TARGET_ALIGNMENTS:-1000000}"
 DOWNSAMPLE_SEED="${DOWNSAMPLE_SEED:-42}"
-DOWNSAMPLE_THREADS="${DOWNSAMPLE_THREADS:-4}"
 FASTQC_ENABLED="${FASTQC_ENABLED:-yes}"
 MAPPING_ENABLED="${MAPPING_ENABLED:-yes}"
 DUPLICATION_ENABLED="${DUPLICATION_ENABLED:-yes}"
@@ -43,6 +52,11 @@ SPLICE_JUNCTION_ENABLED="${SPLICE_JUNCTION_ENABLED:-yes}"
 STRANDEDNESS_ENABLED="${STRANDEDNESS_ENABLED:-yes}"
 DROPOFF_ENABLED="${DROPOFF_ENABLED:-yes}"
 KRAKEN_ENABLED="${KRAKEN_ENABLED:-yes}"
+STAR_ENABLED="${STAR_ENABLED:-yes}"
+HTSEQ_ENABLED="${HTSEQ_ENABLED:-yes}"
+STAR_OUTDIR="${STAR_OUTDIR:-${OUTDIR}/star}"
+HTSEQ_OUTDIR="${HTSEQ_OUTDIR:-${OUTDIR}/htseq}"
+HTSEQ_STRANDED="${HTSEQ_STRANDED:-yes}"
 
 if [[ ! "$FASTQC_THREADS" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: FASTQC_THREADS must be a positive integer: $FASTQC_THREADS" >&2
@@ -58,6 +72,8 @@ case "$DOWNSAMPLE_ENABLED" in
 esac
 
 MODULE_SWITCHES=(
+    STAR_ENABLED
+    HTSEQ_ENABLED
     FASTQC_ENABLED
     MAPPING_ENABLED
     DUPLICATION_ENABLED
@@ -81,6 +97,29 @@ for switch_name in "${MODULE_SWITCHES[@]}"; do
     esac
 done
 
+for prefix in STAR HTSEQ; do
+    switch_name="${prefix}_ENABLED"
+    [[ "${!switch_name}" == "yes" ]] || continue
+    value_name="${prefix}_THREADS"
+    [[ "${!value_name}" =~ ^[1-9][0-9]*$ ]] || {
+        echo "ERROR: $value_name must be a positive integer" >&2; exit 1;
+    }
+    value_name="${prefix}_MEM"
+    [[ "${!value_name}" =~ ^[1-9][0-9]*[KMGTkmgt]?$ ]] || {
+        echo "ERROR: $value_name must be a positive Slurm memory value (e.g. 60G)" >&2; exit 1;
+    }
+    value_name="${prefix}_TIME"
+    [[ "${!value_name}" =~ ^([0-9]+-)?[0-9]+:[0-5][0-9]:[0-5][0-9]$ ]] || {
+        echo "ERROR: $value_name must use [days-]hours:mm:ss" >&2; exit 1;
+    }
+done
+if [[ "$HTSEQ_ENABLED" == "yes" ]]; then
+    case "$HTSEQ_STRANDED" in
+        yes|no|reverse) ;;
+        *) echo "ERROR: HTSEQ_STRANDED must be yes, no, or reverse" >&2; exit 1 ;;
+    esac
+fi
+
 for value_name in DOWNSAMPLE_TARGET_ALIGNMENTS DOWNSAMPLE_SEED DOWNSAMPLE_THREADS; do
     value="${!value_name}"
     if [[ ! "$value" =~ ^[0-9]+$ ]]; then
@@ -98,20 +137,6 @@ if [[ ! -f "$SAMPLESHEET" ]]; then
     echo "ERROR: Samplesheet not found: $SAMPLESHEET" >&2
     exit 1
 fi
-
-# Validate all optional transcriptome BAM paths before any jobs are submitted.
-# Column 9 is optional; eight-column samplesheets leave TRANSCRIPTOME_BAM empty.
-while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM
-do
-    [[ -z "${SAMPLE:-}" ]] && continue
-
-    TRANSCRIPTOME_BAM="${TRANSCRIPTOME_BAM//$'\r'/}"
-
-    if [[ -n "$TRANSCRIPTOME_BAM" && "$TRANSCRIPTOME_BAM" != "NA" && "$TRANSCRIPTOME_BAM" != "." && ! -f "$TRANSCRIPTOME_BAM" ]]; then
-        echo "ERROR: transcriptome_bam not found for $SAMPLE: $TRANSCRIPTOME_BAM" >&2
-        exit 1
-    fi
-done < <(tail -n +2 "$SAMPLESHEET")
 
 # -----------------------------
 # Optional HPC cluster setup
@@ -135,6 +160,152 @@ if [[ -n "${CLUSTER_MODULE:-}" || -n "${CLUSTER_ENV_MODULE:-}" ]]; then
 fi
 
 mkdir -p "${OUTDIR}/logs"
+
+# Resolve relative config paths from the submission working directory before
+# Slurm changes directories. Sample paths are relative to the samplesheet.
+for path_name in OUTDIR SAMPLESHEET STAR_OUTDIR HTSEQ_OUTDIR GTF EXON_BED STAR_INDEX; do
+    path_value="${!path_name:-}"
+    if [[ -n "$path_value" && "$path_value" != /* ]]; then
+        printf -v "$path_name" '%s/%s' "$PWD" "$path_value"
+    fi
+done
+RUN_DIR="$(mktemp -d "${OUTDIR}/logs/run.XXXXXXXX")"
+HPC_RUN_ID="${RUN_DIR##*/}"
+RESOLVED_SAMPLESHEET="${RUN_DIR}/samplesheet.tsv"
+(
+    export SAMPLESHEET STAR_OUTDIR GTF EXON_BED STAR_INDEX DOWNSAMPLE_ENABLED
+    export "${MODULE_SWITCHES[@]}"
+    # Keep samplesheet preparation here, like the embedded parsers in modules.
+    python3 - "$RESOLVED_SAMPLESHEET" <<'PY'
+import csv
+import os
+from pathlib import Path
+import re
+import sys
+
+COLUMNS = [
+    "sample_id", "fastq_r1", "fastq_r2", "bam", "star_log", "sj_tab",
+    "layout", "condition", "transcriptome_bam",
+]
+PATH_COLUMNS = ["fastq_r1", "fastq_r2", "bam", "star_log", "sj_tab", "transcriptome_bam"]
+
+
+def enabled(name):
+    return os.environ.get(name, "yes") == "yes"
+
+
+def require_file(value, label):
+    if value == "NA" or not Path(value).is_file() or not os.access(value, os.R_OK):
+        raise ValueError(f"{label} not found or unreadable: {value}")
+
+
+def read_samples():
+    sheet = Path(os.environ["SAMPLESHEET"]).resolve()
+    samples, seen = [], set()
+    with sheet.open(newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if not reader.fieldnames or len(set(reader.fieldnames)) != len(reader.fieldnames):
+            raise ValueError("Samplesheet header is missing or contains duplicate columns")
+        for column in ("sample_id", "layout", "condition"):
+            if column not in reader.fieldnames:
+                raise ValueError(f"Samplesheet missing required column: {column}")
+        for raw in reader:
+            if not any(raw.values()):
+                continue
+            if None in raw:
+                raise ValueError(f"Too many fields on samplesheet line {reader.line_num}")
+            row = {key: (raw.get(key) or "").strip() for key in COLUMNS}
+            sample = row["sample_id"]
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", sample) or sample == "ALL":
+                raise ValueError(f"Invalid sample_id: {sample!r}; use letters, digits, _, . or - (not ALL)")
+            if sample in seen:
+                raise ValueError(f"Duplicate sample_id: {sample}")
+            seen.add(sample)
+            if row["layout"] not in ("PE", "SE"):
+                raise ValueError(f"layout must be PE or SE for {sample}")
+            if row["condition"] in ("", "NA", "."):
+                raise ValueError(f"condition is required for {sample}")
+            if any("\n" in value or "\r" in value or "\t" in value for value in row.values()):
+                raise ValueError(f"Embedded tabs/newlines are not supported for {sample}")
+            for key in PATH_COLUMNS:
+                value = row[key]
+                # Relative sample paths are relative to the input samplesheet.
+                row[key] = "NA" if value in ("", "NA", ".") else str((sheet.parent / value).resolve())
+            if enabled("STAR_ENABLED"):
+                prefix = Path(os.environ["STAR_OUTDIR"]).resolve() / sample / f"{sample}."
+                row["bam"] = f"{prefix}Aligned.sortedByCoord.out.bam"
+                row["star_log"] = f"{prefix}Log.final.out"
+                row["sj_tab"] = f"{prefix}SJ.out.tab"
+            samples.append(row)
+    if not samples:
+        raise ValueError("Samplesheet contains no samples")
+    return samples
+
+
+def validate_inputs(samples):
+    # Annotation jobs always run, regardless of the analysis switches.
+    require_file(os.environ.get("GTF", "NA"), "GTF")
+    if enabled("STRANDEDNESS_ENABLED"):
+        require_file(os.environ.get("EXON_BED", "NA"), "EXON_BED")
+    if enabled("STAR_ENABLED"):
+        index = os.environ.get("STAR_INDEX", "")
+        if not index or not Path(index).is_dir():
+            raise ValueError(f"STAR_INDEX directory not found: {index}")
+    bam_needed = any(enabled(name) for name in (
+        "HTSEQ_ENABLED", "DOWNSAMPLE_ENABLED", "DUPLICATION_ENABLED",
+        "INSERT_SIZE_ENABLED", "GENEBODY_ENABLED", "READ_DISTRIBUTION_ENABLED",
+        "SPLICE_JUNCTION_ENABLED", "STRANDEDNESS_ENABLED", "DROPOFF_ENABLED",
+    ))
+    for row in samples:
+        sample = row["sample_id"]
+        if enabled("STAR_ENABLED") or enabled("FASTQC_ENABLED"):
+            require_file(row["fastq_r1"], f"fastq_r1 for {sample}")
+            if row["layout"] == "PE":
+                require_file(row["fastq_r2"], f"fastq_r2 for {sample}")
+                if enabled("STAR_ENABLED") and row["fastq_r1"].endswith(".gz") != row["fastq_r2"].endswith(".gz"):
+                    raise ValueError(f"STAR mates must use the same compression for {sample}")
+        if row["transcriptome_bam"] != "NA":
+            require_file(row["transcriptome_bam"], f"transcriptome_bam for {sample}")
+        if not enabled("STAR_ENABLED"):
+            if bam_needed:
+                require_file(row["bam"], f"bam for {sample}")
+            if enabled("MAPPING_ENABLED") or enabled("KRAKEN_ENABLED"):
+                require_file(row["star_log"], f"star_log for {sample} (disable mapping/Kraken for non-STAR BAMs)")
+            if enabled("SPLICE_JUNCTION_ENABLED"):
+                for key in ("sj_tab", "star_log"):
+                    if row[key] != "NA":
+                        require_file(row[key], f"{key} for {sample}")
+            if enabled("KRAKEN_ENABLED"):
+                prefix = Path(row["star_log"]).parent / f"{sample}.Unmapped.out.mate"
+                require_file(f"{prefix}1", f"STAR unmapped mate1 for {sample}")
+                if row["layout"] == "PE":
+                    require_file(f"{prefix}2", f"STAR unmapped mate2 for {sample}")
+
+
+try:
+    samples = read_samples()
+    validate_inputs(samples)
+    with open(sys.argv[1], "w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=COLUMNS, delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(samples)
+except (OSError, ValueError, KeyError) as error:
+    sys.exit(f"ERROR: {error}")
+PY
+)
+ORIGINAL_CONFIG="$CONFIG"
+CONFIG="${RUN_DIR}/config.sh"
+# Snapshot the config and pin resolved inputs so every job sees the same sheet.
+cat "$ORIGINAL_CONFIG" > "$CONFIG"
+printf '\n# Resolved inputs for this submission.\n' >> "$CONFIG"
+SAMPLESHEET="$RESOLVED_SAMPLESHEET"
+for value_name in SAMPLESHEET OUTDIR STAR_OUTDIR HTSEQ_OUTDIR GTF EXON_BED STAR_INDEX HPC_RUN_ID \
+    HTSEQ_STRANDED DOWNSAMPLE_ENABLED "${MODULE_SWITCHES[@]}"; do
+    printf '%s=%q\n' "$value_name" "${!value_name:-}" >> "$CONFIG"
+done
+# Keep wrappers from previous submissions available for inspection and reruns.
+WRAPPER_DIR="${WRAPPER_DIR}/${HPC_RUN_ID}"
+mkdir -p "$WRAPPER_DIR"
 
 SUBMIT_LOG="${OUTDIR}/logs/submitted_jobs.tsv"
 
@@ -220,7 +391,7 @@ EOF
 
     if [[ -n "$dependency_arg" ]]; then
         echo "Dependency: $dependency_arg" >&2
-        sbatch_output="$(sbatch "$dependency_arg" "$wrapper")"
+        sbatch_output="$(sbatch --kill-on-invalid-dep=yes "$dependency_arg" "$wrapper")"
     else
         echo "Dependency: none" >&2
         sbatch_output="$(sbatch "$wrapper")"
@@ -237,6 +408,26 @@ EOF
 }
 
 # ============================================================
+# 0a. One STAR alignment job per sample
+# ============================================================
+
+star_jobs=()
+STAR_JOBS_TSV="${RUN_DIR}/star_jobs.tsv"
+: > "$STAR_JOBS_TSV"
+if [[ "$STAR_ENABLED" == "yes" ]]; then
+    while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM; do
+        star_job=$(submit_step "00a" "star_${SAMPLE}" "Star_Alignment.sh" \
+            "$STAR_TIME" "$STAR_MEM" "$STAR_THREADS" "" "" "$SAMPLE")
+        star_jobs+=("$star_job")
+        printf '%s\t%s\n' "$SAMPLE" "$star_job" >> "$STAR_JOBS_TSV"
+    done < <(tail -n +2 "$SAMPLESHEET")
+fi
+star_dep="$(IFS=:; echo "${star_jobs[*]-}")"
+sample_star_job() {
+    awk -F '\t' -v sample="$1" '$1 == sample {print $2}' "$STAR_JOBS_TSV"
+}
+
+# ============================================================
 # 0. Optional BAM downsampling
 # ============================================================
 
@@ -250,7 +441,9 @@ if [[ "$DOWNSAMPLE_ENABLED" == "yes" ]]; then
         "Downsample.sh" \
         "04:00:00" \
         "16G" \
-        "$DOWNSAMPLE_THREADS"
+        "$DOWNSAMPLE_THREADS" \
+        "afterok" \
+        "$star_dep"
     )
 fi
 
@@ -286,6 +479,10 @@ submit_step \
 # ============================================================
 
 qc_jobs=("$bins_job")
+if [[ -n "$star_dep" ]]; then
+    qc_jobs+=("${star_jobs[@]}")
+fi
+cohort_alignment_dependency="${bins_job}${star_dep:+:${star_dep}}"
 
 if [[ -n "$downsample_job" ]]; then
     qc_jobs+=("$downsample_job")
@@ -301,7 +498,7 @@ if [[ "$MAPPING_ENABLED" == "yes" ]]; then
         "16G" \
         "1" \
         "afterok" \
-        "$bins_job"
+        "$cohort_alignment_dependency"
     )
     qc_jobs+=("$map_job")
 fi
@@ -316,7 +513,7 @@ if [[ "$SPLICE_JUNCTION_ENABLED" == "yes" ]]; then
         "16G" \
         "1" \
         "afterok" \
-        "$bins_job"
+        "$cohort_alignment_dependency"
     )
     qc_jobs+=("$splice_job")
 fi
@@ -327,17 +524,19 @@ fi
 
 echo "Submitting per-sample QC jobs..." >&2
 
-duplication_dependency="$bins_job"
-genebody_dependency="$bins_job"
-
-if [[ -n "$downsample_job" ]]; then
-    duplication_dependency="${bins_job}:${downsample_job}"
-    genebody_dependency="${bins_job}:${downsample_job}"
-fi
-
 while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM
 do
     [[ -z "${SAMPLE:-}" ]] && continue
+    star_job="$(sample_star_job "$SAMPLE")"
+    alignment_dependency="${bins_job}${star_job:+:${star_job}}"
+    duplication_dependency="${alignment_dependency}${downsample_job:+:${downsample_job}}"
+    genebody_dependency="$duplication_dependency"
+
+    if [[ "$HTSEQ_ENABLED" == "yes" ]]; then
+        htseq_job=$(submit_step "00b" "htseq_${SAMPLE}" "HTSeq_Counts.sh" \
+            "$HTSEQ_TIME" "$HTSEQ_MEM" "$HTSEQ_THREADS" "afterok" "$star_job" "$SAMPLE")
+        qc_jobs+=("$htseq_job")
+    fi
 
     if [[ "$FASTQC_ENABLED" == "yes" ]]; then
         fastqc_job=$(
@@ -395,7 +594,7 @@ do
             "$insert_size_memory" \
             "$insert_size_cpus" \
             "afterok" \
-            "$bins_job" \
+            "$alignment_dependency" \
             "$SAMPLE"
         )
         qc_jobs+=("$insert_size_job")
@@ -427,7 +626,7 @@ do
             "8G" \
             "1" \
             "afterok" \
-            "$bins_job" \
+            "$alignment_dependency" \
             "$SAMPLE"
         )
         qc_jobs+=("$read_dist_job")
@@ -443,7 +642,7 @@ do
             "4G" \
             "1" \
             "afterok" \
-            "$bins_job" \
+            "$alignment_dependency" \
             "$SAMPLE"
         )
         qc_jobs+=("$strand_job")
@@ -459,7 +658,7 @@ do
             "90G" \
             "4" \
             "afterok" \
-            "$bins_job" \
+            "$alignment_dependency" \
             "$SAMPLE"
         )
         qc_jobs+=("$kraken_job")
@@ -478,6 +677,8 @@ if [[ "$DROPOFF_ENABLED" == "yes" ]]; then
     while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM
     do
         [[ -z "${SAMPLE:-}" ]] && continue
+        star_job="$(sample_star_job "$SAMPLE")"
+        alignment_dependency="${bins_job}${star_job:+:${star_job}}"
 
         dropoff_job=$(
         submit_step \
@@ -488,7 +689,7 @@ if [[ "$DROPOFF_ENABLED" == "yes" ]]; then
             "6G" \
             "2" \
             "afterok" \
-            "$bins_job" \
+            "$alignment_dependency" \
             "$SAMPLE"
         )
 
@@ -537,4 +738,5 @@ echo "$SUBMIT_LOG"
 echo
 echo "Final aggregate job:"
 echo "$aggregate_job"
+echo "Runtime config for manual module reruns: $CONFIG"
 echo "============================================================"

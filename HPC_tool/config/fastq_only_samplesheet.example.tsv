@@ -1,0 +1,3 @@
+sample_id	fastq_r1	fastq_r2	layout	condition
+sample_01	/path/to/S1_R1.fastq.gz	/path/to/S1_R2.fastq.gz	PE	CONTROL
+sample_02	/path/to/S2.fastq.gz	NA	SE	CASE

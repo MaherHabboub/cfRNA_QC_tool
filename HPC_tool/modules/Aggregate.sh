@@ -17,6 +17,7 @@ fi
 source "$CONFIG"
 
 MODULE_SWITCHES=(
+    HTSEQ_ENABLED
     FASTQC_ENABLED
     MAPPING_ENABLED
     DUPLICATION_ENABLED
@@ -55,6 +56,8 @@ SUMMARY_TSV="${SUMMARY_DIR}/hpc_qc_summary.tsv"
 ZIP_OUT="${SUMMARY_DIR}/hpc_qc_transfer_bundle.zip"
 MULTIQC_REPORT="${OUTDIR}/multiqc/hpc_qc_multiqc_report.html"
 MULTIQC_DATA_DIR="${OUTDIR}/multiqc/hpc_qc_multiqc_report_data"
+HTSEQ_OUTDIR="${HTSEQ_OUTDIR:-${OUTDIR}/htseq}"
+HPC_RUN_ID="${HPC_RUN_ID:-manual}"
 
 # -----------------------------
 # Software environment
@@ -72,11 +75,14 @@ echo "ZIP_OUT: $ZIP_OUT"
 
 python - "$SAMPLESHEET" "$OUTDIR" "$SUMMARY_TSV" "$ZIP_OUT" "$MULTIQC_REPORT" "$MULTIQC_DATA_DIR" \
     "$FASTQC_ENABLED" "$MAPPING_ENABLED" "$DUPLICATION_ENABLED" \
-    "$INSERT_SIZE_ENABLED" "$READ_DISTRIBUTION_ENABLED" "$SPLICE_JUNCTION_ENABLED" <<'PY'
+    "$INSERT_SIZE_ENABLED" "$READ_DISTRIBUTION_ENABLED" "$SPLICE_JUNCTION_ENABLED" \
+    "$HTSEQ_ENABLED" "$HTSEQ_OUTDIR" "$HPC_RUN_ID" <<'PY'
 import sys
 import os
 import glob
 import zipfile
+import csv
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -94,6 +100,9 @@ duplication_enabled = sys.argv[9] == "yes"
 insert_size_enabled = sys.argv[10] == "yes"
 read_distribution_enabled = sys.argv[11] == "yes"
 splice_junction_enabled = sys.argv[12] == "yes"
+htseq_enabled = sys.argv[13] == "yes"
+countdir = Path(sys.argv[14])
+run_id = sys.argv[15]
 
 summary_tsv.parent.mkdir(parents=True, exist_ok=True)
 
@@ -535,6 +544,76 @@ summary.to_csv(summary_tsv, sep="\t", index=False, na_rep="NA")
 print(f"Wrote summary table: {summary_tsv}")
 
 # -----------------------------
+# Assemble complete HTSeq matrices, independently of QC metric aggregation.
+# Never glob counts: only current samples with current-run completion records
+# are eligible. Disabled HTSeq does not read or require any count files.
+# -----------------------------
+
+count_bundle_files = []
+status_path = summary_tsv.parent / "htseq_counts_status.tsv"
+if htseq_enabled:
+    combined_all = countdir / "htseq_counts_combined_all.tsv"
+    combined_genes = countdir / "htseq_counts_combined_genes_only.tsv"
+    for path in (combined_all, combined_genes):
+        path.unlink(missing_ok=True)
+    sample_ids = samples["sample_id"].tolist()
+    counts_by_sample = {}
+    all_genes = {}  # Ordered union, avoiding quadratic list membership checks.
+    statuses = []
+    for sample in sample_ids:
+        count_file = countdir / sample / f"{sample}_htseq_counts.txt"
+        marker = Path(f"{count_file}.complete")
+        try:
+            if not marker.is_file() or marker.read_text().strip() != run_id:
+                raise ValueError("No successful HTSeq completion recorded for this run")
+            sample_counts = {}
+            with count_file.open() as handle:
+                for line_number, line in enumerate(handle, 1):
+                    line = line.rstrip("\r\n")
+                    if not line:
+                        continue
+                    parts = line.split("\t")
+                    if len(parts) != 2 or not parts[0] or not re.fullmatch(r"[0-9]+", parts[1]):
+                        raise ValueError(f"Invalid count row at line {line_number}")
+                    gene_id, count = parts
+                    if gene_id in sample_counts:
+                        raise ValueError(f"Duplicate gene ID at line {line_number}: {gene_id}")
+                    sample_counts[gene_id] = count
+            if not sample_counts or not any(not gene.startswith("__") for gene in sample_counts):
+                raise ValueError("Count file is empty or has no gene rows")
+            counts_by_sample[sample] = sample_counts
+            all_genes.update(dict.fromkeys(sample_counts))
+            statuses.append((sample, "complete", ""))
+        except (OSError, UnicodeError, ValueError) as error:
+            detail = str(error).replace("\t", " ").replace("\n", " ")
+            statuses.append((sample, "missing_or_invalid", detail))
+            print(f"WARNING: HTSeq counts unavailable for {sample}: {detail}")
+
+    with status_path.open("w", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(["sample_id", "status", "detail"])
+        writer.writerows(statuses)
+    count_bundle_files.append(status_path)
+
+    if sample_ids and len(counts_by_sample) == len(sample_ids):
+        for path, include_special in ((combined_all, True), (combined_genes, False)):
+            temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+            with temporary.open("w", newline="") as handle:
+                writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+                writer.writerow(["gene_id"] + sample_ids)
+                for gene_id in all_genes:
+                    if include_special or not gene_id.startswith("__"):
+                        writer.writerow([gene_id] + [counts_by_sample[s].get(gene_id, "0") for s in sample_ids])
+            temporary.replace(path)
+            count_bundle_files.append(path)
+            print(f"Wrote HTSeq matrix: {path}")
+    else:
+        print("WARNING: HTSeq matrices omitted; see counts/htseq_counts_status.tsv in the QC bundle.")
+else:
+    status_path.unlink(missing_ok=True)
+    print("HTSeq is disabled; creating the QC bundle without counts.")
+
+# -----------------------------
 # Create ZIP bundle
 # -----------------------------
 
@@ -543,6 +622,8 @@ if zip_out.exists():
 
 with zipfile.ZipFile(zip_out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
     add_file_to_zip(zf, summary_tsv, "hpc_qc_summary.tsv")
+    for path in count_bundle_files:
+        add_file_to_zip(zf, path, f"counts/{path.name}")
 
     if multiqc_report.exists():
         add_file_to_zip(zf, multiqc_report, "multiqc/hpc_qc_multiqc_report.html")

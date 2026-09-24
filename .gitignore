@@ -38,3 +38,6 @@ __pycache__/
 # macOS / Windows
 .DS_Store
 Thumbs.db
+
+# Local context for AI-assisted development; never commit.
+CODEX_HANDOFF.md

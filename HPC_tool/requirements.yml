@@ -26,6 +26,8 @@ dependencies:
   - picard>=3.0
   - rseqc>=5.0
   - samtools>=1.19
+  - star>=2.7.11b
+  - htseq>=2.0.7
   - ucsc-gtftogenepred
   - ucsc-genepredtobed
 
