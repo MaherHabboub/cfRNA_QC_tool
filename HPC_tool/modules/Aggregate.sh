@@ -17,6 +17,7 @@ fi
 source "$CONFIG"
 
 MODULE_SWITCHES=(
+    DOWNSAMPLE_ENABLED
     HTSEQ_ENABLED
     FASTQC_ENABLED
     MAPPING_ENABLED
@@ -76,7 +77,7 @@ echo "ZIP_OUT: $ZIP_OUT"
 python - "$SAMPLESHEET" "$OUTDIR" "$SUMMARY_TSV" "$ZIP_OUT" "$MULTIQC_REPORT" "$MULTIQC_DATA_DIR" \
     "$FASTQC_ENABLED" "$MAPPING_ENABLED" "$DUPLICATION_ENABLED" \
     "$INSERT_SIZE_ENABLED" "$READ_DISTRIBUTION_ENABLED" "$SPLICE_JUNCTION_ENABLED" \
-    "$HTSEQ_ENABLED" "$HTSEQ_OUTDIR" "$HPC_RUN_ID" <<'PY'
+    "$HTSEQ_ENABLED" "$HTSEQ_OUTDIR" "$HPC_RUN_ID" "$DOWNSAMPLE_ENABLED" <<'PY'
 import sys
 import os
 import glob
@@ -103,6 +104,7 @@ splice_junction_enabled = sys.argv[12] == "yes"
 htseq_enabled = sys.argv[13] == "yes"
 countdir = Path(sys.argv[14])
 run_id = sys.argv[15]
+downsample_enabled = sys.argv[16] == "yes"
 
 summary_tsv.parent.mkdir(parents=True, exist_ok=True)
 
@@ -131,6 +133,15 @@ def parse_num(x):
         return float(s)
     except Exception:
         return np.nan
+
+
+def current_sample_output(path):
+    parent = Path(path).parent
+    marker = parent / ".complete"
+    try:
+        return parent.name in samples["sample_id"].values and marker.read_text().strip() == run_id
+    except OSError:
+        return False
 
 
 def clean_sample_from_path(path):
@@ -299,6 +310,7 @@ mapping_files = glob.glob(
     str(outdir / "mapping" / "**" / "*.mapping_summary.tsv"),
     recursive=True
 ) if mapping_enabled else []
+mapping_files = [path for path in mapping_files if current_sample_output(path)]
 
 for f in mapping_files:
     df = read_tsv_if_exists(f)
@@ -502,6 +514,7 @@ sj_files = glob.glob(
     str(outdir / "splice_junctions" / "**" / "*.splice_junction_summary.tsv"),
     recursive=True
 ) if splice_junction_enabled else []
+sj_files = [path for path in sj_files if current_sample_output(path)]
 
 for f in sj_files:
     df = read_tsv_if_exists(f)
@@ -542,6 +555,38 @@ summary = summary[final_cols]
 summary.to_csv(summary_tsv, sep="\t", index=False, na_rep="NA")
 
 print(f"Wrote summary table: {summary_tsv}")
+
+# Combine independent downsampling records only after all sample jobs finish.
+# Consumers use the per-sample manifests; this cohort file is for inspection.
+if downsample_enabled:
+    bam_dir = outdir / "downsampled_bams"
+    manifest_dir = bam_dir / "manifests" / run_id
+    header = ["sample_id", "original_bam", "selected_bam", "original_alignments",
+              "retained_alignments", "requested_fraction", "observed_fraction", "seed", "status"]
+    records = []
+    for sample in samples["sample_id"]:
+        path = manifest_dir / f"{sample}.tsv"
+        try:
+            with path.open(newline="") as handle:
+                reader = csv.DictReader(handle, delimiter="\t")
+                rows = list(reader)
+                if reader.fieldnames != header or len(rows) != 1 or rows[0]["sample_id"] != sample:
+                    raise ValueError("invalid per-sample manifest")
+                row = rows[0]
+                if not Path(row["selected_bam"]).is_file():
+                    raise ValueError("selected BAM is missing")
+                records.append(row)
+        except (OSError, ValueError, TypeError) as error:
+            print(f"WARNING: No usable current-run downsampling record for {sample}: {error}")
+    bam_dir.mkdir(parents=True, exist_ok=True)
+    manifest = bam_dir / "downsampling_manifest.tsv"
+    temporary = manifest.with_name(f".{manifest.name}.tmp.{os.getpid()}")
+    with temporary.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=header, delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(records)
+    temporary.replace(manifest)
+    print(f"Wrote cohort downsampling manifest: {manifest} ({len(records)} samples)")
 
 # -----------------------------
 # Assemble complete HTSeq matrices, independently of QC metric aggregation.

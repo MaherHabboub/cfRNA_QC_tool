@@ -3,9 +3,10 @@
 set -euo pipefail
 
 CONFIG="${1:-}"
+TARGET_SAMPLE="${2:-ALL}"
 
 if [[ -z "$CONFIG" ]]; then
-    echo "Usage: bash Downsample.sh path/to/config.sh" >&2
+    echo "Usage: bash Downsample.sh path/to/config.sh [sample_id]" >&2
     exit 1
 fi
 
@@ -57,8 +58,8 @@ fi
 # Paths
 # -----------------------------
 BAM_DIR="${OUTDIR}/downsampled_bams"
-MANIFEST="${BAM_DIR}/downsampling_manifest.tsv"
-MANIFEST_TMP="${MANIFEST}.tmp.$$"
+MANIFEST_DIR="${BAM_DIR}/manifests/${HPC_RUN_ID:-manual}"
+MANIFEST_TMP=""
 
 # -----------------------------
 # Software environment
@@ -85,11 +86,11 @@ if [[ -n "$duplicate_samples" ]]; then
     exit 1
 fi
 
-mkdir -p "$BAM_DIR"
-trap 'rm -f "$MANIFEST_TMP"' EXIT
+mkdir -p "$BAM_DIR" "$MANIFEST_DIR"
+trap '[[ -z "$MANIFEST_TMP" ]] || rm -f "$MANIFEST_TMP"' EXIT
 
 HEADER='sample_id\toriginal_bam\tselected_bam\toriginal_alignments\tretained_alignments\trequested_fraction\tobserved_fraction\tseed\tstatus'
-printf '%b\n' "$HEADER" > "$MANIFEST_TMP"
+N_SAMPLES=0
 
 echo "Running BAM downsampling..."
 echo "Target alignments: $DOWNSAMPLE_TARGET_ALIGNMENTS"
@@ -99,6 +100,12 @@ echo "Threads: $DOWNSAMPLE_THREADS"
 while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM
 do
     [[ -z "${SAMPLE:-}" ]] && continue
+    [[ "$TARGET_SAMPLE" == "ALL" || "$TARGET_SAMPLE" == "$SAMPLE" ]] || continue
+    MANIFEST="${MANIFEST_DIR}/${SAMPLE}.tsv"
+    MANIFEST_TMP="${MANIFEST}.tmp.$$"
+    # Retried jobs must not leave an earlier success available to consumers.
+    rm -f "$MANIFEST"
+    printf '%b\n' "$HEADER" > "$MANIFEST_TMP"
 
     if [[ ! -f "$BAM" ]]; then
         echo "ERROR: BAM not found for $SAMPLE: $BAM" >&2
@@ -153,9 +160,12 @@ do
         >> "$MANIFEST_TMP"
 
     echo "$SAMPLE: $status ($retained_count of $original_count alignments)"
+    mv -f "$MANIFEST_TMP" "$MANIFEST"
+    MANIFEST_TMP=""
+    ((N_SAMPLES+=1))
 done < <(tail -n +2 "$SAMPLESHEET")
 
-mv -f "$MANIFEST_TMP" "$MANIFEST"
+(( N_SAMPLES > 0 )) || { echo "ERROR: Sample '$TARGET_SAMPLE' not found" >&2; exit 1; }
 
 echo "BAM downsampling complete."
-echo "Manifest: $MANIFEST"
+echo "Per-sample manifests: $MANIFEST_DIR"

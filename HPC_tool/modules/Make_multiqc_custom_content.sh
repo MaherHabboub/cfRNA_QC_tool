@@ -73,7 +73,7 @@ echo "Custom content folder: $CUSTOM_MQC_DIR"
 python - "$OUTDIR" "$CUSTOM_MQC_DIR" "$SAMPLESHEET" \
     "$FASTQC_ENABLED" "$MAPPING_ENABLED" "$INSERT_SIZE_ENABLED" \
     "$SPLICE_JUNCTION_ENABLED" "$DROPOFF_ENABLED" "$KRAKEN_ENABLED" \
-    "$KRAKEN_TOP_GENERA" <<'PY'
+    "$KRAKEN_TOP_GENERA" "${HPC_RUN_ID:-manual}" <<'PY'
 import sys
 import os
 import glob
@@ -81,6 +81,9 @@ import shutil
 import pandas as pd
 import math
 import csv
+from pathlib import Path
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
@@ -96,15 +99,26 @@ splice_junction_enabled = sys.argv[7] == "yes"
 dropoff_enabled = sys.argv[8] == "yes"
 kraken_enabled = sys.argv[9] == "yes"
 kraken_top_genera = int(sys.argv[10])
+run_id = sys.argv[11]
+with open(samplesheet_path, newline="") as handle:
+    sample_ids = [row["sample_id"] for row in csv.DictReader(handle, delimiter="\t") if row.get("sample_id")]
+sample_order = {sample: i for i, sample in enumerate(sample_ids)}
 
 os.makedirs(custom_dir, exist_ok=True)
 
-def read_tsvs(pattern):
+def read_tsvs(pattern, current_only=False):
     files = glob.glob(pattern, recursive=True)
     dfs = []
 
+    if current_only:
+        files.sort(key=lambda f: sample_order.get(Path(f).parent.name, len(sample_order)))
     for f in files:
         try:
+            if current_only:
+                parent = Path(f).parent
+                marker = parent / ".complete"
+                if parent.name not in sample_order or not marker.is_file() or marker.read_text().strip() != run_id:
+                    continue
             df = pd.read_csv(f, sep="\t")
             if not df.empty:
                 dfs.append(df)
@@ -185,11 +199,121 @@ def df_to_mqc_yaml(df, out_yaml, section_id, section_name, description):
 
     print(f"Wrote: {out_yaml}")
 
+def write_splice_cohort(df):
+    result_dir = Path(outdir) / "splice_junctions"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    table = result_dir / "splice_read_fractions.tsv"
+    summary_file = result_dir / "splice_read_fraction_cohort_summary.tsv"
+    png_file = result_dir / "splice_read_fractions.png"
+    pdf_file = result_dir / "splice_read_fractions.pdf"
+    # Never display a plot or table from an earlier run after current failures.
+    for path in (table, summary_file, png_file, pdf_file):
+        path.unlink(missing_ok=True)
+    if df.empty:
+        print("WARNING: No current splice results; omitting cohort summaries.")
+        return
+    df.to_csv(table, sep="\t", index=False)
+    valid = df["total_unique_mapped_reads"] > 0
+    if not valid.all():
+        excluded = ", ".join(df.loc[~valid, "sample"].astype(str))
+        print(f"WARNING: Excluding samples with zero qualifying reads: {excluded}", file=sys.stderr)
+        df = df.loc[valid].copy()
+
+    if df.empty:
+        print("WARNING: No samples with qualifying reads are available for plotting")
+        return
+
+    if df["condition"].isna().any() or df["condition"].astype(str).str.strip().eq("").any():
+        print("WARNING: At least one sample has an empty condition; omitting splice plot")
+        return
+
+    df["condition"] = df["condition"].astype(str)
+    conditions = list(dict.fromkeys(df["condition"]))
+    groups = [
+        df.loc[df["condition"] == condition, "fraction_spliced"].to_numpy(dtype=float)
+        for condition in conditions
+    ]
+    means = np.array([values.mean() for values in groups])
+
+    summary = (
+        df.groupby("condition", sort=False)["fraction_spliced"]
+          .agg(n_samples="size", mean_fraction="mean", median_fraction="median",
+               standard_deviation="std", minimum_fraction="min", maximum_fraction="max")
+          .reset_index()
+    )
+    summary.to_csv(summary_file, sep="\t", index=False, float_format="%.6f")
+
+    rng = np.random.default_rng(42)
+    x_positions = np.arange(1, len(conditions) + 1)
+    cmap = plt.get_cmap("tab10")
+    colors = [cmap(i % 10) for i in range(len(conditions))]
+
+    fig_width = max(6.6, 1.35 * len(conditions) + 2.0)
+    fig, ax = plt.subplots(figsize=(fig_width, 5.7))
+    ax.set_facecolor("#EBEBEB")
+
+    boxplot = ax.boxplot(
+        groups,
+        positions=x_positions,
+        widths=0.55,
+        patch_artist=True,
+        showfliers=False,
+        medianprops={"color": "#000000", "linewidth": 1.5},
+        whiskerprops={"color": "#4D4D4D", "linewidth": 1.1},
+        capprops={"color": "#4D4D4D", "linewidth": 1.1},
+        boxprops={"edgecolor": "#4D4D4D", "linewidth": 1.1},
+    )
+
+    for box, color in zip(boxplot["boxes"], colors):
+        box.set_facecolor(color)
+        box.set_alpha(0.55)
+
+    for x, values, color in zip(x_positions, groups, colors):
+        jitter = rng.uniform(-0.075, 0.075, size=len(values))
+        ax.scatter(
+            np.full(len(values), x) + jitter,
+            values,
+            s=34,
+            color=color,
+            alpha=0.95,
+            edgecolors="#333333",
+            linewidths=0.4,
+            zorder=3,
+        )
+
+    label_heights = [min(1.075, values.max() + 0.055) for values in groups]
+    for x, mean, label_y in zip(x_positions, means, label_heights):
+        ax.text(x, label_y, f"{mean:.4f}", ha="center", va="bottom", fontsize=15, fontweight="bold")
+
+    ax.set_xlim(0.4, len(conditions) + 0.6)
+    ax.set_ylim(0.0, 1.12)
+    ax.set_xticks(x_positions, conditions)
+    ax.set_yticks(np.arange(0, 1.01, 0.20))
+    ax.set_yticks(np.arange(0, 1.01, 0.05), minor=True)
+    ax.set_ylabel("Fraction of uniquely mapped reads crossing splice junctions")
+    ax.set_xlabel("Condition")
+    ax.spines[["top", "right"]].set_visible(False)
+    for side in ["left", "bottom"]:
+        ax.spines[side].set_visible(True)
+        ax.spines[side].set_color("#000000")
+        ax.spines[side].set_linewidth(1.1)
+
+    ax.tick_params(axis="both", which="major", color="#000000", width=1.0)
+    ax.tick_params(axis="y", which="minor", length=0)
+    ax.grid(axis="y", which="major", color="#A8A8A8", linewidth=0.8)
+    ax.grid(axis="y", which="minor", color="#CACACA", linewidth=0.45)
+    ax.set_axisbelow(True)
+
+    fig.tight_layout()
+    fig.savefig(png_file, dpi=300, bbox_inches="tight", facecolor="white")
+    fig.savefig(pdf_file, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
 # -----------------------------
 # Custom tables to include
 # -----------------------------
 
-mapping = read_tsvs(os.path.join(outdir, "mapping", "**", "*.mapping_summary.tsv")) if mapping_enabled else pd.DataFrame()
+mapping = read_tsvs(os.path.join(outdir, "mapping", "**", "*.mapping_summary.tsv"), current_only=True) if mapping_enabled else pd.DataFrame()
 df_to_mqc_yaml(
     mapping,
     os.path.join(custom_dir, "custom_mapping_summary_mqc.yaml"),
@@ -198,7 +322,7 @@ df_to_mqc_yaml(
     "Mapping metrics parsed from STAR Log.final.out by the QC pipeline."
 )
 
-splice = read_tsvs(os.path.join(outdir, "splice_junctions", "**", "*.splice_junction_summary.tsv")) if splice_junction_enabled else pd.DataFrame()
+splice = read_tsvs(os.path.join(outdir, "splice_junctions", "**", "*.splice_junction_summary.tsv"), current_only=True) if splice_junction_enabled else pd.DataFrame()
 df_to_mqc_yaml(
     splice,
     os.path.join(custom_dir, "custom_splice_junction_summary_mqc.yaml"),
@@ -208,8 +332,9 @@ df_to_mqc_yaml(
 )
 
 splice_read_fractions = read_tsvs(
-    os.path.join(outdir, "splice_junctions", "**", "*.splice_read_fraction.tsv")
+    os.path.join(outdir, "splice_junctions", "**", "*.splice_read_fraction.tsv"), current_only=True
 ) if splice_junction_enabled else pd.DataFrame()
+write_splice_cohort(splice_read_fractions)
 df_to_mqc_yaml(
     splice_read_fractions,
     os.path.join(custom_dir, "custom_splice_read_fractions_mqc.yaml"),

@@ -103,12 +103,23 @@ stage_file() {
     fi
 }
 
+# Mapping/splice jobs publish this marker only after a successful sample run.
+# Limit staging to the current samplesheet and exclude old or failed outputs.
+current_sample_output() {
+    local parent sample marker
+    parent="$(dirname "$1")"
+    sample="$(basename "$parent")"
+    marker="${parent}/.complete"
+    [[ -f "$marker" && "$(cat "$marker")" == "${HPC_RUN_ID:-manual}" ]] || return 1
+    awk -F '\t' -v sample="$sample" 'NR > 1 && $1 == sample {found=1} END {exit !found}' "$SAMPLESHEET"
+}
+
 # -----------------------------
 # Clean old staged files
 # -----------------------------
 # We keep the output report/data, but refresh the staged input.
 echo "Refreshing staged MultiQC input files..."
-find "$MULTIQC_INPUT_DIR" -mindepth 1 -type f -delete 2>/dev/null || true
+find "$MULTIQC_INPUT_DIR" -mindepth 1 \( -type f -o -type l \) -delete 2>/dev/null || true
 mkdir -p "$CUSTOM_DIR"
 
 # -----------------------------
@@ -149,8 +160,9 @@ if [[ "$FASTQC_ENABLED" == "yes" ]]; then
 fi
 
 if [[ "$MAPPING_ENABLED" == "yes" ]]; then
-    find "$OUTDIR" -type f -name "*.Log.final.out" | while read -r f
+    find "$OUTDIR" -path "${OUTDIR}/mapping/*" -type f -name "*.Log.final.out" | while read -r f
     do
+        current_sample_output "$f" || continue
         stage_file "$f" "$MULTIQC_INPUT_DIR"
     done
 fi
@@ -192,6 +204,7 @@ echo "Staging source custom QC summary tables..."
 if [[ "$MAPPING_ENABLED" == "yes" ]]; then
     find "$OUTDIR" -type f -name "*.mapping_summary.tsv" | while read -r f
     do
+        current_sample_output "$f" || continue
         stage_file "$f" "$CUSTOM_DIR"
     done
 fi
@@ -206,6 +219,9 @@ fi
 if [[ "$SPLICE_JUNCTION_ENABLED" == "yes" ]]; then
     find "$OUTDIR" -type f \( -name "*.splice_junction_summary.tsv" -o -name "*.splice_read_fraction.tsv" -o -name "splice_read_fraction_cohort_summary.tsv" \) | while read -r f
     do
+        if [[ "$(basename "$f")" != "splice_read_fraction_cohort_summary.tsv" ]]; then
+            current_sample_output "$f" || continue
+        fi
         stage_file "$f" "$CUSTOM_DIR"
     done
 fi

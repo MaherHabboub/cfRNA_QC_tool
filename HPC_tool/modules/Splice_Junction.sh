@@ -3,9 +3,10 @@
 set -euo pipefail
 
 CONFIG="${1:-}"
+TARGET_SAMPLE="${2:-ALL}"
 
 if [[ -z "$CONFIG" ]]; then
-    echo "Usage: bash Splice_Junction.sh path/to/config.sh"
+    echo "Usage: bash Splice_Junction.sh path/to/config.sh [sample_id]"
     exit 1
 fi
 
@@ -27,10 +28,6 @@ source "$CONFIG"
 # -----------------------------
 MAPQ_MIN=30
 RESULT_DIR="${OUTDIR}/splice_junctions"
-COMBINED_TSV="${RESULT_DIR}/splice_read_fractions.tsv"
-CONDITION_SUMMARY_TSV="${RESULT_DIR}/splice_read_fraction_cohort_summary.tsv"
-PLOT_PNG="${RESULT_DIR}/splice_read_fractions.png"
-PLOT_PDF="${RESULT_DIR}/splice_read_fractions.pdf"
 
 # -----------------------------
 # Software environment
@@ -47,11 +44,8 @@ for cmd in samtools python; do
 done
 
 mkdir -p "$RESULT_DIR"
-TMP_TSV="${COMBINED_TSV}.tmp.$$"
-trap 'rm -f "$TMP_TSV"' EXIT
 
 HEADER='sample\tcondition\ttotal_unique_mapped_reads\tspliced_reads\tfraction_spliced\tmapq_min'
-printf '%b\n' "$HEADER" > "$TMP_TSV"
 
 echo "Running splice junction QC..."
 echo "Sample sheet: $SAMPLESHEET"
@@ -78,6 +72,7 @@ while IFS= read -r SAMPLE_LINE; do
     CONDITION="${FIELDS[7]}"
 
     [[ -z "${SAMPLE:-}" ]] && continue
+    [[ "$TARGET_SAMPLE" == "ALL" || "$SAMPLE" == "$TARGET_SAMPLE" ]] || continue
 
     SAMPLE="${SAMPLE//$'\r'/}"
     BAM="${BAM//$'\r'/}"
@@ -92,6 +87,9 @@ while IFS= read -r SAMPLE_LINE; do
 
     SAMPLE_OUTDIR="${RESULT_DIR}/${SAMPLE}"
     mkdir -p "$SAMPLE_OUTDIR"
+    rm -f "${SAMPLE_OUTDIR}/.complete" \
+        "${SAMPLE_OUTDIR}/${SAMPLE}.splice_junction_summary.tsv" \
+        "${SAMPLE_OUTDIR}/${SAMPLE}.Log.final.out"
 
     echo "------------------------------------"
     echo "Processing: $SAMPLE"
@@ -171,7 +169,8 @@ while IFS= read -r SAMPLE_LINE; do
             "$FRACTION_SPLICED" "$MAPQ_MIN"
     } > "$SAMPLE_TSV"
 
-    tail -n 1 "$SAMPLE_TSV" >> "$TMP_TSV"
+    printf '%s\n' "${HPC_RUN_ID:-manual}" > "${SAMPLE_OUTDIR}/.complete.tmp.$"
+    mv -f "${SAMPLE_OUTDIR}/.complete.tmp.$" "${SAMPLE_OUTDIR}/.complete"
     ((N_SAMPLES+=1))
 
     echo "Unique mapped reads: $TOTAL_UNIQUE"
@@ -184,123 +183,4 @@ done < <(tail -n +2 "$SAMPLESHEET")
     exit 1
 }
 
-mv -f "$TMP_TSV" "$COMBINED_TSV"
-
-# Plot one spliced-read fraction distribution per condition. Individual
-# points are samples; the annotation above each box is the unweighted mean.
-python - "$COMBINED_TSV" "$CONDITION_SUMMARY_TSV" "$PLOT_PNG" "$PLOT_PDF" <<'PYTHON'
-import sys
-
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-
-table, summary_file, png_file, pdf_file = sys.argv[1:]
-df = pd.read_csv(table, sep="\t")
-
-if df.empty:
-    raise SystemExit("Combined splice-read fraction table is empty")
-
-valid = df["total_unique_mapped_reads"] > 0
-if not valid.all():
-    excluded = ", ".join(df.loc[~valid, "sample"].astype(str))
-    print(f"WARNING: Excluding samples with zero qualifying reads: {excluded}", file=sys.stderr)
-    df = df.loc[valid].copy()
-
-if df.empty:
-    raise SystemExit("No samples with qualifying reads are available for plotting")
-
-if df["condition"].isna().any() or df["condition"].astype(str).str.strip().eq("").any():
-    raise SystemExit("At least one sample has an empty condition")
-
-df["condition"] = df["condition"].astype(str)
-conditions = list(dict.fromkeys(df["condition"]))
-groups = [
-    df.loc[df["condition"] == condition, "fraction_spliced"].to_numpy(dtype=float)
-    for condition in conditions
-]
-means = np.array([values.mean() for values in groups])
-
-summary = (
-    df.groupby("condition", sort=False)["fraction_spliced"]
-      .agg(n_samples="size", mean_fraction="mean", median_fraction="median",
-           standard_deviation="std", minimum_fraction="min", maximum_fraction="max")
-      .reset_index()
-)
-summary.to_csv(summary_file, sep="\t", index=False, float_format="%.6f")
-
-rng = np.random.default_rng(42)
-x_positions = np.arange(1, len(conditions) + 1)
-cmap = plt.get_cmap("tab10")
-colors = [cmap(i % 10) for i in range(len(conditions))]
-
-fig_width = max(6.6, 1.35 * len(conditions) + 2.0)
-fig, ax = plt.subplots(figsize=(fig_width, 5.7))
-ax.set_facecolor("#EBEBEB")
-
-boxplot = ax.boxplot(
-    groups,
-    positions=x_positions,
-    widths=0.55,
-    patch_artist=True,
-    showfliers=False,
-    medianprops={"color": "#000000", "linewidth": 1.5},
-    whiskerprops={"color": "#4D4D4D", "linewidth": 1.1},
-    capprops={"color": "#4D4D4D", "linewidth": 1.1},
-    boxprops={"edgecolor": "#4D4D4D", "linewidth": 1.1},
-)
-
-for box, color in zip(boxplot["boxes"], colors):
-    box.set_facecolor(color)
-    box.set_alpha(0.55)
-
-for x, values, color in zip(x_positions, groups, colors):
-    jitter = rng.uniform(-0.075, 0.075, size=len(values))
-    ax.scatter(
-        np.full(len(values), x) + jitter,
-        values,
-        s=34,
-        color=color,
-        alpha=0.95,
-        edgecolors="#333333",
-        linewidths=0.4,
-        zorder=3,
-    )
-
-label_heights = [min(1.075, values.max() + 0.055) for values in groups]
-for x, mean, label_y in zip(x_positions, means, label_heights):
-    ax.text(x, label_y, f"{mean:.4f}", ha="center", va="bottom", fontsize=15, fontweight="bold")
-
-ax.set_xlim(0.4, len(conditions) + 0.6)
-ax.set_ylim(0.0, 1.12)
-ax.set_xticks(x_positions, conditions)
-ax.set_yticks(np.arange(0, 1.01, 0.20))
-ax.set_yticks(np.arange(0, 1.01, 0.05), minor=True)
-ax.set_ylabel("Fraction of uniquely mapped reads crossing splice junctions")
-ax.set_xlabel("Condition")
-ax.spines[["top", "right"]].set_visible(False)
-for side in ["left", "bottom"]:
-    ax.spines[side].set_visible(True)
-    ax.spines[side].set_color("#000000")
-    ax.spines[side].set_linewidth(1.1)
-
-ax.tick_params(axis="both", which="major", color="#000000", width=1.0)
-ax.tick_params(axis="y", which="minor", length=0)
-ax.grid(axis="y", which="major", color="#A8A8A8", linewidth=0.8)
-ax.grid(axis="y", which="minor", color="#CACACA", linewidth=0.45)
-ax.set_axisbelow(True)
-
-fig.tight_layout()
-fig.savefig(png_file, dpi=300, bbox_inches="tight", facecolor="white")
-fig.savefig(pdf_file, bbox_inches="tight", facecolor="white")
-plt.close(fig)
-PYTHON
-
-echo "Splice junction QC complete."
-echo "Samples plotted: $N_SAMPLES"
-echo "Combined table: $COMBINED_TSV"
-echo "Condition summary: $CONDITION_SUMMARY_TSV"
-echo "PNG plot: $PLOT_PNG"
-echo "PDF plot: $PLOT_PDF"
+echo "Splice junction QC complete for $N_SAMPLES sample(s). Cohort summaries are created during reporting."

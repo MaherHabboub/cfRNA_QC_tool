@@ -3,9 +3,10 @@
 set -euo pipefail
 
 CONFIG="${1:-}"
+TARGET_SAMPLE="${2:-ALL}"
 
 if [[ -z "$CONFIG" ]]; then
-    echo "Usage: bash QC_map.sh path/to/config.sh"
+    echo "Usage: bash Map.sh path/to/config.sh [sample_id]"
     exit 1
 fi
 
@@ -53,8 +54,14 @@ get_val() {
   ' "$logfile"
 }
 
-tail -n +2 "$SAMPLESHEET" | while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM
+N_SAMPLES=0
+while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM
 do
+    [[ -n "${SAMPLE:-}" ]] || continue
+    [[ "$TARGET_SAMPLE" == "ALL" || "$SAMPLE" == "$TARGET_SAMPLE" ]] || continue
+    SAMPLE_OUTDIR="${RESULT_DIR}/${SAMPLE}"
+    mkdir -p "$SAMPLE_OUTDIR"
+    rm -f "${SAMPLE_OUTDIR}/.complete"
 
     echo "------------------------------------"
     echo "Processing: $SAMPLE"
@@ -120,8 +127,13 @@ PY
 
     } > "$OUTTSV"
 
+    printf '%s\n' "${HPC_RUN_ID:-manual}" > "${SAMPLE_OUTDIR}/.complete.tmp.$$"
+    mv -f "${SAMPLE_OUTDIR}/.complete.tmp.$$" "${SAMPLE_OUTDIR}/.complete"
+    ((N_SAMPLES+=1))
     echo "Done: $SAMPLE"
 
-done
+done < <(tail -n +2 "$SAMPLESHEET")
+
+(( N_SAMPLES > 0 )) || { echo "ERROR: No mapping results for '$TARGET_SAMPLE'" >&2; exit 1; }
 
 echo "Mapping QC complete."

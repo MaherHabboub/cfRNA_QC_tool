@@ -21,6 +21,7 @@ import zipfile
 
 TOOL = Path(__file__).resolve().parents[1]
 HAS_PANDAS = all(importlib.util.find_spec(name) for name in ("pandas", "numpy"))
+HAS_PLOTS = HAS_PANDAS and importlib.util.find_spec("matplotlib") is not None
 QC_SWITCHES = [
     "FASTQC", "MAPPING", "DUPLICATION", "INSERT_SIZE", "GENEBODY",
     "READ_DISTRIBUTION", "SPLICE_JUNCTION", "STRANDEDNESS", "DROPOFF", "KRAKEN",
@@ -45,11 +46,20 @@ elif name == "STAR":
 elif name == "samtools":
     if args[0] == "quickcheck" and os.environ.get("BAD_BAM"):
         sys.exit(1)
-    if args[0] == "view":
+    if args[0] == "view" and "-H" in args:
         order = "queryname" if os.environ.get("UNSORTED_BAM") else "coordinate"
         print(f"@HD\tVN:1.6\tSO:{order}")
         if not os.environ.get("NO_SQ"):
             print("@SQ\tSN:chr1\tLN:1000")
+    elif args[0] == "view" and "-c" in args:
+        print(1000000 if ".downsampled.bam" in args[-1] else (2000000 if "S2" in args[-1] else 100))
+    elif args[0] == "view" and "-b" in args:
+        pathlib.Path(args[args.index("-o") + 1]).write_text("sampled fixture\n")
+    elif args[0] == "view" and not os.environ.get("NO_READS"):
+        for i in range(4):
+            spliced = i < (2 if "S2" in args[-1] else 1)
+            cigar = "25M100N25M" if spliced else "50M"
+            print(f"read{i}\t0\tchr1\t1\t60\t{cigar}")
     if args[0] == "sort":
         pathlib.Path(args[args.index("-o") + 1]).write_text("sorted fixture\n")
 elif name == "htseq-count":
@@ -62,6 +72,23 @@ elif name == "htseq-count":
         print("geneB\t2\ngeneA\t3\n__no_feature\t4")
     else:
         print("geneA\t7\ngeneC\t8\n__no_feature\t9")
+elif name == "java":
+    for arg in args:
+        if arg.startswith("O="):
+            pathlib.Path(arg[2:]).write_text("Picard fixture\n")
+        if arg.startswith("M="):
+            pathlib.Path(arg[2:]).write_text("LIBRARY\tA\tB\tC\tD\tE\tF\tG\tPERCENT_DUPLICATION\nlib\t0\t0\t0\t0\t0\t0\t0\t0.2\n")
+elif name == "geneBody_coverage.py":
+    pathlib.Path(args[args.index("-o") + 1] + ".geneBodyCoverage.txt").write_text("coverage fixture\n")
+elif name == "multiqc":
+    if "--help" in args:
+        print("--no-clean-up")
+    elif "--version" in args:
+        print("mock MultiQC")
+    else:
+        out = pathlib.Path(args[args.index("--outdir") + 1])
+        out.mkdir(parents=True, exist_ok=True)
+        (out / args[args.index("--filename") + 1]).write_text("<html>Mock MultiQC report</html>")
 '''
 
 
@@ -74,7 +101,7 @@ class IntegrationTests(unittest.TestCase):
         shutil.copytree(TOOL, self.tool, ignore=shutil.ignore_patterns("wrappers", "logs", "__pycache__"))
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for name in ("sbatch", "STAR", "htseq-count", "samtools"):
+        for name in ("sbatch", "STAR", "htseq-count", "samtools", "java", "geneBody_coverage.py", "multiqc"):
             script = self.bin / name
             script.write_text(f"#!{sys.executable}\n" + MOCK_TOOL)
             script.chmod(0o755)
@@ -88,7 +115,8 @@ class IntegrationTests(unittest.TestCase):
             shim.chmod(0o755)
         self.calls = self.root / "calls.jsonl"
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
-                        MOCK_LOG=str(self.calls), MOCK_COUNTER=str(self.root / "counter"))
+                        MOCK_LOG=str(self.calls), MOCK_COUNTER=str(self.root / "counter"),
+                        EBROOTPICARD=str(self.root), MPLCONFIGDIR=str(self.root / "mpl"))
         self.out = self.root / "out"
         self.sheet = self.root / "samples.tsv"
         self.config = self.root / "config.sh"
@@ -249,34 +277,173 @@ class IntegrationTests(unittest.TestCase):
         sort = next(args for args in self.commands("samtools") if args[0] == "sort")
         self.assertEqual(sort[sort.index("-@") + 1], "2")
         self.assertIn("#SBATCH --cpus-per-task=2", Path(self.jobs["fastqc_S2"]["wrapper_script"]).read_text())
-        self.assertIn("#SBATCH --cpus-per-task=4", Path(self.jobs["downsample"]["wrapper_script"]).read_text())
+        self.assertIn("#SBATCH --cpus-per-task=4", Path(self.jobs["downsample_S2"]["wrapper_script"]).read_text())
 
     def test_alignment_dependencies_and_transcriptome_selection(self):
         self.write_sheet(ninth=True)
         transcriptome = self.root / "transcriptome.bam"
         transcriptome.touch()
         self.sheet.write_text(self.sheet.read_text().replace("CONTROL\tNA", f"CONTROL\t{transcriptome}"))
-        self.write_config(DOWNSAMPLE_ENABLED="yes", **{f"{name}_ENABLED": "yes" for name in QC_SWITCHES})
-        self.submit()
-        star_ids = {self.jobs[f"star_{s}"]["job_id"] for s in ("S2", "S1")}
-        for name in ("downsample", "mapping", "splice_junction"):
-            self.assertTrue(star_ids <= self.dependencies(name))
-        for sample in ("S2", "S1"):
-            own = self.jobs[f"star_{sample}"]["job_id"]
-            other = next(iter(star_ids - {own}))
-            for module in ("htseq", "duplication", "genebody", "insert_size_distribution", "read_distribution", "strandedness", "kraken", "dropoff"):
-                deps = self.dependencies(f"{module}_{sample}")
-                self.assertIn(own, deps)
-                self.assertNotIn(other, deps)
-            self.assertNotIn(own, self.dependencies(f"fastqc_{sample}"))
-            for module in ("duplication", "genebody"):
-                self.assertIn(self.jobs["downsample"]["job_id"], self.dependencies(f"{module}_{sample}"))
-            self.assertNotIn(self.jobs["downsample"]["job_id"], self.dependencies(f"htseq_{sample}"))
-        self.assertIn("Insert_Size_Distribution_Transcriptome.sh", Path(self.jobs["insert_size_distribution_S2"]["wrapper_script"]).read_text())
-        self.assertIn("Insert_Size_Distribution_Genomic.sh", Path(self.jobs["insert_size_distribution_S1"]["wrapper_script"]).read_text())
+        for star_enabled in ("yes", "no"):
+            for downsample_enabled in ("yes", "no"):
+                with self.subTest(star=star_enabled, downsample=downsample_enabled):
+                    self.write_config(STAR_ENABLED=star_enabled, DOWNSAMPLE_ENABLED=downsample_enabled,
+                                      **{f"{name}_ENABLED": "yes" for name in QC_SWITCHES})
+                    self.submit()
+                    gtf = {self.jobs["gtf_to_bed12"]["job_id"]}
+                    bins = {self.jobs["make_dropoff_bins"]["job_id"]}
+                    self.assertEqual(self.dependencies("gtf_to_bed12"), set())
+                    self.assertEqual(self.dependencies("make_dropoff_bins"), set())
+                    for sample in ("S2", "S1"):
+                        star = {self.jobs[f"star_{sample}"]["job_id"]} if star_enabled == "yes" else set()
+                        selected = {self.jobs[f"downsample_{sample}"]["job_id"]} if downsample_enabled == "yes" else star
+                        expected = {
+                            "fastqc": set(), "htseq": star, "mapping": star, "splice_junction": star,
+                            "strandedness": star, "kraken": star, "duplication": selected,
+                            "genebody": gtf | selected, "read_distribution": gtf | star,
+                            "dropoff": bins | star,
+                            "insert_size_distribution": set() if sample == "S2" else star,
+                        }
+                        if star_enabled == "yes":
+                            expected["star"] = set()
+                        if downsample_enabled == "yes":
+                            expected["downsample"] = star
+                        for module, deps in expected.items():
+                            name = f"{module}_{sample}"
+                            self.assertEqual(self.dependencies(name), deps, name)
+                            self.assertEqual(self.jobs[name]["extra_args"], sample)
+                    analysis_jobs = {job["job_id"] for name, job in self.jobs.items()
+                                     if name not in ("multiqc", "aggregate")}
+                    self.assertEqual(self.dependencies("multiqc"), analysis_jobs)
+                    self.assertTrue(self.jobs["multiqc"]["dependency"].startswith("--dependency=afterany:"))
+                    self.assertEqual(self.dependencies("aggregate"), {self.jobs["multiqc"]["job_id"]})
+                    self.assertTrue(self.jobs["aggregate"]["dependency"].startswith("--dependency=afterany:"))
+                    self.assertIn("Insert_Size_Distribution_Transcriptome.sh", Path(self.jobs["insert_size_distribution_S2"]["wrapper_script"]).read_text())
+                    self.assertIn("Insert_Size_Distribution_Genomic.sh", Path(self.jobs["insert_size_distribution_S1"]["wrapper_script"]).read_text())
         for args in self.commands("sbatch"):
             if any(arg.startswith("--dependency=") for arg in args):
                 self.assertIn("--kill-on-invalid-dep=yes", args)
+
+    @unittest.skipUnless(HAS_PANDAS, "pandas/numpy required for real aggregation")
+    def test_parallel_downsampling_manifests_and_consumers(self):
+        self.write_config(STAR_ENABLED="no", HTSEQ_ENABLED="no", DOWNSAMPLE_ENABLED="yes",
+                          DUPLICATION_ENABLED="yes", GENEBODY_ENABLED="yes")
+        self.submit()
+        # Run both sample jobs concurrently; no shared manifest exists yet.
+        processes = [subprocess.Popen(["bash", self.jobs[f"downsample_{s}"]["wrapper_script"]],
+                                      env=dict(self.env, SLURM_CPUS_PER_TASK="4"), cwd=self.root,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                     for s in ("S2", "S1")]
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=30)
+            self.assertEqual(process.returncode, 0, stdout + stderr)
+        manifests = self.out / "downsampled_bams/manifests" / self.runtime.parent.name
+        records = {}
+        for sample in ("S2", "S1"):
+            with (manifests / f"{sample}.tsv").open() as handle:
+                rows = list(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["sample_id"], sample)
+            records[sample] = rows[0]
+        self.assertEqual(records["S2"]["status"], "downsampled")
+        self.assertEqual(records["S2"]["retained_alignments"], "1000000")
+        self.assertEqual(records["S1"]["status"], "not_downsampled")
+        self.assertEqual(records["S1"]["selected_bam"], str(self.root / "S1.bam"))
+        cohort = self.out / "downsampled_bams/downsampling_manifest.tsv"
+        self.assertFalse(cohort.exists())
+        annotation = self.out / "annotation"
+        annotation.mkdir()
+        bed = annotation / "genes.bed"
+        bed.write_text("chr1\t0\t1000\n")
+        (annotation / "BED12.path.txt").write_text(str(bed))
+        self.run_job("duplication_S2")
+        self.run_job("genebody_S2")
+        for args in self.commands("java"):
+            self.assertIn(f'I={records["S2"]["selected_bam"]}', args)
+        self.run_job("aggregate")
+        with cohort.open() as handle:
+            rows = list(csv.DictReader(handle, delimiter="\t"))
+        self.assertEqual([row["sample_id"] for row in rows], ["S2", "S1"])
+        # A failed retry invalidates only its own manifest; S1 remains usable.
+        self.run_job("downsample_S2", success=False, BAD_BAM="yes")
+        self.assertFalse((manifests / "S2.tsv").exists())
+        self.assertTrue((manifests / "S1.tsv").exists())
+        self.run_job("aggregate")
+        with cohort.open() as handle:
+            self.assertEqual([row["sample_id"] for row in csv.DictReader(handle, delimiter="\t")], ["S1"])
+        # A new submission must never merge the previous run's records.
+        self.submit()
+        self.run_job("aggregate")
+        with cohort.open() as handle:
+            self.assertEqual(list(csv.DictReader(handle, delimiter="\t")), [])
+
+    def test_sample_selection_and_manual_all_modes(self):
+        self.write_config(STAR_ENABLED="no", HTSEQ_ENABLED="no", DOWNSAMPLE_ENABLED="yes",
+                          MAPPING_ENABLED="yes", SPLICE_JUNCTION_ENABLED="yes")
+        self.submit()
+        for job in ("downsample", "mapping", "splice_junction"):
+            self.run_job(f"{job}_S2")
+        for directory in ("mapping", "splice_junctions"):
+            self.assertTrue((self.out / directory / "S2/.complete").exists())
+            self.assertFalse((self.out / directory / "S1").exists())
+        self.assertFalse((self.out / "splice_junctions/splice_read_fractions.tsv").exists())
+        for module in ("Downsample.sh", "Map.sh", "Splice_Junction.sh"):
+            self.run_bash(self.tool / "modules" / module, self.runtime, "missing", success=False)
+            self.run_bash(self.tool / "modules" / module, self.runtime)
+        self.assertTrue((self.out / "mapping/S1/.complete").exists())
+        self.assertTrue((self.out / "splice_junctions/S1/.complete").exists())
+
+    @unittest.skipUnless(HAS_PLOTS, "pandas/numpy/matplotlib required for actual reporting")
+    def test_splice_cohort_reporting_statistics_and_stale_exclusion(self):
+        self.write_config(STAR_ENABLED="no", HTSEQ_ENABLED="no", MAPPING_ENABLED="yes",
+                          SPLICE_JUNCTION_ENABLED="yes")
+        self.sheet.write_text(self.sheet.read_text().replace("CASE", "CONTROL"))
+        self.submit()
+        for sample in ("S2", "S1"):
+            self.run_job(f"mapping_{sample}")
+            self.run_job(f"splice_junction_{sample}")
+        self.run_job("multiqc")
+        result = self.out / "splice_junctions"
+        with (result / "splice_read_fractions.tsv").open() as handle:
+            rows = list(csv.DictReader(handle, delimiter="\t"))
+        self.assertEqual([row["sample"] for row in rows], ["S2", "S1"])
+        self.assertEqual([float(row["fraction_spliced"]) for row in rows], [0.5, 0.25])
+        with (result / "splice_read_fraction_cohort_summary.tsv").open() as handle:
+            summary = list(csv.DictReader(handle, delimiter="\t"))[0]
+        self.assertEqual(summary["n_samples"], "2")
+        self.assertEqual(float(summary["mean_fraction"]), 0.375)
+        self.assertEqual(float(summary["median_fraction"]), 0.375)
+        self.assertAlmostEqual(float(summary["standard_deviation"]), 0.176777, places=6)
+        self.assertTrue((result / "splice_read_fractions.png").is_file())
+        self.assertTrue((result / "splice_read_fractions.pdf").is_file())
+        self.assertTrue((self.out / "multiqc/custom_content/splice_read_fractions_mqc.png").is_file())
+        self.run_job("aggregate")
+        with self.bundle() as bundle:
+            self.assertIn("multiqc/hpc_qc_multiqc_report.html", bundle.namelist())
+        # Old sample outputs still exist but must not enter any current report.
+        (result / "S1/.complete").write_text("old-run")
+        (self.out / "mapping/S1/.complete").write_text("old-run")
+        self.run_job("multiqc")
+        self.run_job("aggregate")
+        with (result / "splice_read_fractions.tsv").open() as handle:
+            self.assertEqual([row["sample"] for row in csv.DictReader(handle, delimiter="\t")], ["S2"])
+        with (self.out / "summary/hpc_qc_summary.tsv").open() as handle:
+            summary = {row["sample"]: row for row in csv.DictReader(handle, delimiter="\t")}
+        self.assertEqual(summary["S1"]["mapped_pct"], "NA")
+        self.assertEqual(summary["S1"]["total_junctions"], "NA")
+        staged = self.out / "multiqc/multiqc_input"
+        self.assertFalse((staged / "S1.Log.final.out").exists())
+        self.assertFalse((staged / "custom_tables/S1.splice_read_fraction.tsv").exists())
+        # Zero qualifying reads keep the sample table but omit the cohort plot.
+        self.run_job("splice_junction_S2", NO_READS="yes")
+        self.run_job("multiqc")
+        self.assertFalse((result / "splice_read_fractions.png").exists())
+        self.assertFalse((result / "splice_read_fraction_cohort_summary.tsv").exists())
+        # A failed sample must not abort custom content or MultiQC reporting.
+        self.run_job("splice_junction_S2", success=False, BAD_BAM="yes")
+        self.run_job("multiqc")
+        self.assertFalse((result / "splice_read_fractions.tsv").exists())
+        self.assertTrue((self.out / "multiqc/hpc_qc_multiqc_report.html").is_file())
 
     def test_invalid_inputs_fail_before_submission(self):
         original = dict(self.settings)

@@ -408,129 +408,41 @@ EOF
 }
 
 # ============================================================
-# 0a. One STAR alignment job per sample
+# Independent annotation preparation
 # ============================================================
+gtf_job=$(submit_step "01" "gtf_to_bed12" "GTF_to_BED12.sh" "01:00:00" "16G" "1")
+bins_job=$(submit_step "02" "make_dropoff_bins" "Make_Dropoff_Bins.sh" "01:00:00" "16G" "1")
 
-star_jobs=()
-STAR_JOBS_TSV="${RUN_DIR}/star_jobs.tsv"
-: > "$STAR_JOBS_TSV"
-if [[ "$STAR_ENABLED" == "yes" ]]; then
-    while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM; do
-        star_job=$(submit_step "00a" "star_${SAMPLE}" "Star_Alignment.sh" \
-            "$STAR_TIME" "$STAR_MEM" "$STAR_THREADS" "" "" "$SAMPLE")
-        star_jobs+=("$star_job")
-        printf '%s\t%s\n' "$SAMPLE" "$star_job" >> "$STAR_JOBS_TSV"
-    done < <(tail -n +2 "$SAMPLESHEET")
-fi
-star_dep="$(IFS=:; echo "${star_jobs[*]-}")"
-sample_star_job() {
-    awk -F '\t' -v sample="$1" '$1 == sample {print $2}' "$STAR_JOBS_TSV"
-}
+# Every submitted preparation/analysis job belongs in the reporting barrier.
+qc_jobs=("$gtf_job" "$bins_job")
 
 # ============================================================
-# 0. Optional BAM downsampling
+# Per-sample processing: wait only for actual input producers.
+# An empty dependency list means the inputs already exist.
 # ============================================================
-
-downsample_job=""
-
-if [[ "$DOWNSAMPLE_ENABLED" == "yes" ]]; then
-    downsample_job=$(
-    submit_step \
-        "00" \
-        "downsample" \
-        "Downsample.sh" \
-        "04:00:00" \
-        "16G" \
-        "$DOWNSAMPLE_THREADS" \
-        "afterok" \
-        "$star_dep"
-    )
-fi
-
-# ============================================================
-# 1. Annotation jobs
-# ============================================================
-
-gtf_job=$(
-submit_step \
-    "01" \
-    "gtf_to_bed12" \
-    "GTF_to_BED12.sh" \
-    "01:00:00" \
-    "16G" \
-    "1"
-)
-
-bins_job=$(
-submit_step \
-    "02" \
-    "make_dropoff_bins" \
-    "Make_Dropoff_Bins.sh" \
-    "01:00:00" \
-    "16G" \
-    "1" \
-    "afterok" \
-    "$gtf_job"
-)
-
-# ============================================================
-# 2. QC module jobs
-# Mapping and splice-junction summaries run once for the full cohort.
-# ============================================================
-
-qc_jobs=("$bins_job")
-if [[ -n "$star_dep" ]]; then
-    qc_jobs+=("${star_jobs[@]}")
-fi
-cohort_alignment_dependency="${bins_job}${star_dep:+:${star_dep}}"
-
-if [[ -n "$downsample_job" ]]; then
-    qc_jobs+=("$downsample_job")
-fi
-
-if [[ "$MAPPING_ENABLED" == "yes" ]]; then
-    map_job=$(
-    submit_step \
-        "04" \
-        "mapping" \
-        "Map.sh" \
-        "02:00:00" \
-        "16G" \
-        "1" \
-        "afterok" \
-        "$cohort_alignment_dependency"
-    )
-    qc_jobs+=("$map_job")
-fi
-
-if [[ "$SPLICE_JUNCTION_ENABLED" == "yes" ]]; then
-    splice_job=$(
-    submit_step \
-        "09" \
-        "splice_junction" \
-        "Splice_Junction.sh" \
-        "04:00:00" \
-        "16G" \
-        "1" \
-        "afterok" \
-        "$cohort_alignment_dependency"
-    )
-    qc_jobs+=("$splice_job")
-fi
-
-# ============================================================
-# 2b. Per-sample QC module jobs
-# ============================================================
-
-echo "Submitting per-sample QC jobs..." >&2
-
 while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM
 do
     [[ -z "${SAMPLE:-}" ]] && continue
-    star_job="$(sample_star_job "$SAMPLE")"
-    alignment_dependency="${bins_job}${star_job:+:${star_job}}"
-    duplication_dependency="${alignment_dependency}${downsample_job:+:${downsample_job}}"
-    genebody_dependency="$duplication_dependency"
+    star_job=""
+    downsample_job=""
+
+    if [[ "$STAR_ENABLED" == "yes" ]]; then
+        star_job=$(submit_step "00a" "star_${SAMPLE}" "Star_Alignment.sh" \
+            "$STAR_TIME" "$STAR_MEM" "$STAR_THREADS" "" "" "$SAMPLE")
+        qc_jobs+=("$star_job")
+    fi
+
+    if [[ "$FASTQC_ENABLED" == "yes" ]]; then
+        fastqc_job=$(submit_step "03" "fastqc_${SAMPLE}" "Fastqc.sh" \
+            "01:00:00" "3G" "$FASTQC_THREADS" "" "" "$SAMPLE")
+        qc_jobs+=("$fastqc_job")
+    fi
+
+    if [[ "$DOWNSAMPLE_ENABLED" == "yes" ]]; then
+        downsample_job=$(submit_step "00" "downsample_${SAMPLE}" "Downsample.sh" \
+            "04:00:00" "16G" "$DOWNSAMPLE_THREADS" "afterok" "$star_job" "$SAMPLE")
+        qc_jobs+=("$downsample_job")
+    fi
 
     if [[ "$HTSEQ_ENABLED" == "yes" ]]; then
         htseq_job=$(submit_step "00b" "htseq_${SAMPLE}" "HTSeq_Counts.sh" \
@@ -538,165 +450,81 @@ do
         qc_jobs+=("$htseq_job")
     fi
 
-    if [[ "$FASTQC_ENABLED" == "yes" ]]; then
-        fastqc_job=$(
-        submit_step \
-            "03" \
-            "fastqc_${SAMPLE}" \
-            "Fastqc.sh" \
-            "01:00:00" \
-            "3G" \
-            "$FASTQC_THREADS" \
-            "afterok" \
-            "$bins_job" \
-            "$SAMPLE"
-        )
-        qc_jobs+=("$fastqc_job")
+    if [[ "$MAPPING_ENABLED" == "yes" ]]; then
+        map_job=$(submit_step "04" "mapping_${SAMPLE}" "Map.sh" \
+            "02:00:00" "16G" "1" "afterok" "$star_job" "$SAMPLE")
+        qc_jobs+=("$map_job")
     fi
 
+    # Downsampling already depends on this sample's STAR job when needed.
+    duplication_dependency="${downsample_job:-$star_job}"
+    genebody_dependency="${gtf_job}${duplication_dependency:+:${duplication_dependency}}"
+    read_distribution_dependency="${gtf_job}${star_job:+:${star_job}}"
+    dropoff_dependency="${bins_job}${star_job:+:${star_job}}"
+
     if [[ "$DUPLICATION_ENABLED" == "yes" ]]; then
-        dup_job=$(
-        submit_step \
-            "05" \
-            "duplication_${SAMPLE}" \
-            "Duplication.sh" \
-            "2:00:00" \
-            "40G" \
-            "2" \
-            "afterok" \
-            "$duplication_dependency" \
-            "$SAMPLE"
-        )
+        dup_job=$(submit_step "05" "duplication_${SAMPLE}" "Duplication.sh" \
+            "2:00:00" "40G" "2" "afterok" "$duplication_dependency" "$SAMPLE")
         qc_jobs+=("$dup_job")
     fi
 
     TRANSCRIPTOME_BAM="${TRANSCRIPTOME_BAM//$'\r'/}"
-
     if [[ -n "$TRANSCRIPTOME_BAM" && "$TRANSCRIPTOME_BAM" != "NA" && "$TRANSCRIPTOME_BAM" != "." ]]; then
         insert_size_module="Insert_Size_Distribution_Transcriptome.sh"
         insert_size_time="24:00:00"
         insert_size_memory="40G"
         insert_size_cpus="4"
+        insert_size_dependency=""
     else
         insert_size_module="Insert_Size_Distribution_Genomic.sh"
         insert_size_time="2:00:00"
         insert_size_memory="20G"
         insert_size_cpus="2"
+        insert_size_dependency="$star_job"
     fi
-
     if [[ "$INSERT_SIZE_ENABLED" == "yes" ]]; then
-        insert_size_job=$(
-        submit_step \
-            "06" \
-            "insert_size_distribution_${SAMPLE}" \
-            "$insert_size_module" \
-            "$insert_size_time" \
-            "$insert_size_memory" \
-            "$insert_size_cpus" \
-            "afterok" \
-            "$alignment_dependency" \
-            "$SAMPLE"
-        )
+        insert_size_job=$(submit_step "06" "insert_size_distribution_${SAMPLE}" "$insert_size_module" \
+            "$insert_size_time" "$insert_size_memory" "$insert_size_cpus" \
+            "afterok" "$insert_size_dependency" "$SAMPLE")
         qc_jobs+=("$insert_size_job")
     fi
 
     if [[ "$GENEBODY_ENABLED" == "yes" ]]; then
-        genebody_job=$(
-        submit_step \
-            "07" \
-            "genebody_${SAMPLE}" \
-            "Genebody.sh" \
-            "6:00:00" \
-            "8G" \
-            "2" \
-            "afterok" \
-            "$genebody_dependency" \
-            "$SAMPLE"
-        )
+        genebody_job=$(submit_step "07" "genebody_${SAMPLE}" "Genebody.sh" \
+            "6:00:00" "8G" "2" "afterok" "$genebody_dependency" "$SAMPLE")
         qc_jobs+=("$genebody_job")
     fi
 
     if [[ "$READ_DISTRIBUTION_ENABLED" == "yes" ]]; then
-        read_dist_job=$(
-        submit_step \
-            "08" \
-            "read_distribution_${SAMPLE}" \
-            "Read_Distribution.sh" \
-            "02:00:00" \
-            "8G" \
-            "1" \
-            "afterok" \
-            "$alignment_dependency" \
-            "$SAMPLE"
-        )
+        read_dist_job=$(submit_step "08" "read_distribution_${SAMPLE}" "Read_Distribution.sh" \
+            "02:00:00" "8G" "1" "afterok" "$read_distribution_dependency" "$SAMPLE")
         qc_jobs+=("$read_dist_job")
     fi
 
+    if [[ "$SPLICE_JUNCTION_ENABLED" == "yes" ]]; then
+        splice_job=$(submit_step "09" "splice_junction_${SAMPLE}" "Splice_Junction.sh" \
+            "04:00:00" "16G" "1" "afterok" "$star_job" "$SAMPLE")
+        qc_jobs+=("$splice_job")
+    fi
+
     if [[ "$STRANDEDNESS_ENABLED" == "yes" ]]; then
-        strand_job=$(
-        submit_step \
-            "10" \
-            "strandedness_${SAMPLE}" \
-            "Strandedness.sh" \
-            "02:00:00" \
-            "4G" \
-            "1" \
-            "afterok" \
-            "$alignment_dependency" \
-            "$SAMPLE"
-        )
+        strand_job=$(submit_step "10" "strandedness_${SAMPLE}" "Strandedness.sh" \
+            "02:00:00" "4G" "1" "afterok" "$star_job" "$SAMPLE")
         qc_jobs+=("$strand_job")
     fi
 
-    if [[ "$KRAKEN_ENABLED" == "yes" ]]; then
-        kraken_job=$(
-        submit_step \
-            "12" \
-            "kraken_${SAMPLE}" \
-            "Kraken.sh" \
-            "04:00:00" \
-            "90G" \
-            "4" \
-            "afterok" \
-            "$alignment_dependency" \
-            "$SAMPLE"
-        )
-        qc_jobs+=("$kraken_job")
+    if [[ "$DROPOFF_ENABLED" == "yes" ]]; then
+        dropoff_job=$(submit_step "11" "dropoff_${SAMPLE}" "Dropoff.sh" \
+            "3:00:00" "6G" "2" "afterok" "$dropoff_dependency" "$SAMPLE")
+        qc_jobs+=("$dropoff_job")
     fi
 
+    if [[ "$KRAKEN_ENABLED" == "yes" ]]; then
+        kraken_job=$(submit_step "12" "kraken_${SAMPLE}" "Kraken.sh" \
+            "04:00:00" "90G" "4" "afterok" "$star_job" "$SAMPLE")
+        qc_jobs+=("$kraken_job")
+    fi
 done < <(tail -n +2 "$SAMPLESHEET")
-
-# ============================================================
-# 2c. Exon-intron dropoff
-# One job per sample, because this module can be slow and memory-intensive.
-# ============================================================
-
-if [[ "$DROPOFF_ENABLED" == "yes" ]]; then
-    echo "Submitting one Dropoff job per sample..." >&2
-
-    while IFS=$'\t' read -r SAMPLE FASTQ1 FASTQ2 BAM STARLOG SJTAB LAYOUT CONDITION TRANSCRIPTOME_BAM
-    do
-        [[ -z "${SAMPLE:-}" ]] && continue
-        star_job="$(sample_star_job "$SAMPLE")"
-        alignment_dependency="${bins_job}${star_job:+:${star_job}}"
-
-        dropoff_job=$(
-        submit_step \
-            "11" \
-            "dropoff_${SAMPLE}" \
-            "Dropoff.sh" \
-            "3:00:00" \
-            "6G" \
-            "2" \
-            "afterok" \
-            "$alignment_dependency" \
-            "$SAMPLE"
-        )
-
-        qc_jobs+=("$dropoff_job")
-
-    done < <(tail -n +2 "$SAMPLESHEET")
-fi
 
 # Join QC jobs with colon for Slurm dependency
 qc_dep="$(IFS=:; echo "${qc_jobs[*]}")"

@@ -38,7 +38,7 @@ esac
 # -----------------------------
 BED12_PATH_FILE="${OUTDIR}/annotation/BED12.path.txt"
 RESULT_DIR="${OUTDIR}/gene_body_coverage"
-DOWNSAMPLE_MANIFEST="${OUTDIR}/downsampled_bams/downsampling_manifest.tsv"
+DOWNSAMPLE_MANIFEST_DIR="${OUTDIR}/downsampled_bams/manifests/${HPC_RUN_ID:-manual}"
 
 # -----------------------------
 # Software environment
@@ -70,19 +70,6 @@ if [[ -z "$BED12" || ! -f "$BED12" ]]; then
     exit 1
 fi
 
-if [[ "$DOWNSAMPLE_ENABLED" == "yes" ]]; then
-    if [[ ! -s "$DOWNSAMPLE_MANIFEST" ]]; then
-        echo "ERROR: Downsampling is enabled, but its manifest is missing or empty: $DOWNSAMPLE_MANIFEST" >&2
-        echo "Run Downsample.sh successfully before this module." >&2
-        exit 1
-    fi
-
-    expected_header=$'sample_id\toriginal_bam\tselected_bam\toriginal_alignments\tretained_alignments\trequested_fraction\tobserved_fraction\tseed\tstatus'
-    if [[ "$(head -n 1 "$DOWNSAMPLE_MANIFEST")" != "$expected_header" ]]; then
-        echo "ERROR: Downsampling manifest has an unexpected header: $DOWNSAMPLE_MANIFEST" >&2
-        exit 1
-    fi
-fi
 
 mkdir -p "$RESULT_DIR"
 
@@ -103,6 +90,18 @@ do
     QC_BAM="$BAM"
 
     if [[ "$DOWNSAMPLE_ENABLED" == "yes" ]]; then
+        DOWNSAMPLE_MANIFEST="${DOWNSAMPLE_MANIFEST_DIR}/${SAMPLE}.tsv"
+        if [[ ! -s "$DOWNSAMPLE_MANIFEST" ]]; then
+            echo "ERROR: Downsampling is enabled, but its manifest is missing or empty: $DOWNSAMPLE_MANIFEST" >&2
+            echo "Run Downsample.sh successfully before this module." >&2
+            exit 1
+        fi
+
+        expected_header=$'sample_id\toriginal_bam\tselected_bam\toriginal_alignments\tretained_alignments\trequested_fraction\tobserved_fraction\tseed\tstatus'
+        if [[ "$(head -n 1 "$DOWNSAMPLE_MANIFEST")" != "$expected_header" ]]; then
+            echo "ERROR: Downsampling manifest has an unexpected header: $DOWNSAMPLE_MANIFEST" >&2
+            exit 1
+        fi
         manifest_match_count="$(awk -F '\t' -v sample="$SAMPLE" 'NR > 1 && $1 == sample {count++} END {print count+0}' "$DOWNSAMPLE_MANIFEST")"
         if [[ "$manifest_match_count" != "1" ]]; then
             echo "ERROR: Expected one downsampling manifest record for $SAMPLE; found $manifest_match_count." >&2
