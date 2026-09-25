@@ -115,47 +115,7 @@ fwrite(
   sep = "\t"
 )
 
-# ---- plot 1: before/after histogram for first sample ----
-samp <- colnames(count_mat)[1]
-
-df_before <- data.frame(
-  x = log2(count_mat[, samp] + 1),
-  which = "Before: log2(raw + 1)"
-)
-
-df_after <- data.frame(
-  x = log_norm[, samp],
-  which = "After: log2(DESeq2-normalized + 1)"
-)
-
-df <- rbind(df_before, df_after)
-
-df$which <- factor(
-  df$which,
-  levels = c(
-    "Before: log2(raw + 1)",
-    "After: log2(DESeq2-normalized + 1)"
-  )
-)
-
-p_hist <- ggplot(df, aes(x = x)) +
-  geom_histogram(bins = 60) +
-  facet_wrap(~which, ncol = 1, scales = "free_y") +
-  theme_minimal() +
-  labs(
-    title = paste("Distribution check:", samp),
-    x = "Expression value",
-    y = "Number of genes"
-  )
-
-ggsave(
-  file.path(out_dir, "qc_before_after_hist.png"),
-  p_hist,
-  width = 7,
-  height = 6
-)
-
-# ---- plot 2: library size raw vs normalized ----
+# ---- plot 1: library size raw vs normalized ----
 lib_raw <- colSums(count_mat)
 lib_norm <- colSums(norm_counts)
 
@@ -170,8 +130,8 @@ p_lib <- ggplot(lib_df, aes(x = raw, y = normalized, label = sample)) +
   theme_minimal() +
   labs(
     title = "Library size check: raw vs normalized",
-    x = "Raw library size",
-    y = "Normalized library size (sum of normalized counts)"
+    x = "raw library size",
+    y = "normalized library size (sum of normalized counts)"
   )
 
 ggsave(
@@ -181,7 +141,7 @@ ggsave(
   height = 5
 )
 
-# ---- plot 3A: density before normalization, nonzero genes only ----
+# ---- plot 2A: density before normalization, nonzero genes only ----
 raw_log <- log2(count_mat + 1)
 
 raw_dt <- as.data.table(raw_log, keep.rownames = "gene_id")
@@ -202,7 +162,7 @@ p_density_before <- ggplot(raw_long_nz, aes(x = value, color = sample)) +
     title = "Density curves before normalization",
     subtitle = "Nonzero genes only; values are log2(raw counts + 1)",
     x = "log2(raw counts + 1)",
-    y = "Density"
+    y = "density"
   )
 
 ggsave(
@@ -212,7 +172,7 @@ ggsave(
   height = 5
 )
 
-# ---- plot 3B: density after normalization, nonzero genes only ----
+# ---- plot 2B: density after normalization, nonzero genes only ----
 norm_dt <- as.data.table(log_norm, keep.rownames = "gene_id")
 norm_long <- melt(
   norm_dt,
@@ -230,8 +190,8 @@ p_density_after <- ggplot(norm_long_nz, aes(x = value, color = sample)) +
   labs(
     title = "Density curves after DESeq2 normalization",
     subtitle = "Nonzero genes only; values are log2(normalized counts + 1)",
-    x = "log2(DESeq2-normalized counts + 1)",
-    y = "Density"
+    x = "log2(normalized counts + 1)",
+    y = "density"
   )
 
 ggsave(

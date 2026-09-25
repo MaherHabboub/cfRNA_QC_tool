@@ -170,7 +170,7 @@ p_scree <- ggplot(ve_plot, aes(x = PC, y = variance_explained)) +
   labs(
     title = "PCA scree (top variable genes)",
     x = NULL,
-    y = "Variance explained"
+    y = "variance explained"
   ) +
   theme_minimal()
 
@@ -191,8 +191,8 @@ p_scatter <- ggplot(scores, aes(x = PC1, y = PC2)) +
   geom_text(aes(label = sample_id), vjust = -0.7, size = 3) +
   labs(
     title = "PCA (top variable genes): PC1 vs PC2",
-    x = paste0("PC1 (", round(100 * ve[1], 1), "%)"),
-    y = paste0("PC2 (", round(100 * ve[2], 1), "%)")
+    x = paste0("PC1 (variance explained: ", round(100 * ve[1], 1), "%)"),
+    y = paste0("PC2 (variance explained: ", round(100 * ve[2], 1), "%)")
   ) +
   theme_minimal()
 
@@ -266,8 +266,8 @@ if (!is.null(metadata_path) && metadata_path != "") {
               geom_text(aes(label = sample_id), vjust = -0.7, size = 3, color = "black") +
               labs(
                 title = paste0("PCA (top variable genes): colored by ", meta_col),
-                x = paste0("PC1 (", round(100 * ve[1], 1), "%)"),
-                y = paste0("PC2 (", round(100 * ve[2], 1), "%)"),
+                x = paste0("PC1 (variance explained: ", round(100 * ve[1], 1), "%)"),
+                y = paste0("PC2 (variance explained: ", round(100 * ve[2], 1), "%)"),
                 color = meta_col
               ) +
               theme_minimal()

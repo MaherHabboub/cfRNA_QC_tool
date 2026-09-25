@@ -188,9 +188,11 @@ p <- ggplot(
   ) +
   theme_minimal() +
   labs(
-    title = "Sex chromosome QC: XIST vs mean(Y panel)",
-    x = "Mean log2(norm+1) of Y genes (EIF1AY, KDM5D, UTY, DDX3Y, RPS4Y1)",
-    y = "log2(norm+1) of XIST"
+    title = expression("sex chromosome QC: " * italic(XIST) * " vs mean Y-chromosome gene expression"),
+    x = expression("mean log2(normalized counts + 1) of Y-chromosome genes (" *
+      italic(EIF1AY) * ", " * italic(KDM5D) * ", " * italic(UTY) * ", " *
+      italic(DDX3Y) * ", " * italic(RPS4Y1) * ")"),
+    y = expression("log2(normalized counts + 1) of " * italic(XIST))
   )
 
 ggsave(

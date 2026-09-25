@@ -269,10 +269,10 @@ plot_score_vs_pc1 <- function(df, score_col, set_name, out_png) {
   spear <- cor.test(plot_df$PC1, plot_df[[score_col]], method = "spearman")
   
   lab <- paste0(
-    "R = ", round(unname(pear$estimate), 2),
-    ", P = ", format.pval(pear$p.value, digits = 2), "\n",
+    "r = ", round(unname(pear$estimate), 2),
+    ", p = ", format.pval(pear$p.value, digits = 2), "\n",
     "\u03C1 = ", round(unname(spear$estimate), 2),
-    ", P = ", format.pval(spear$p.value, digits = 2)
+    ", p = ", format.pval(spear$p.value, digits = 2)
   )
   
   p <- ggplot(plot_df, aes(x = PC1, y = .data[[score_col]])) +
@@ -290,7 +290,7 @@ plot_score_vs_pc1 <- function(df, score_col, set_name, out_png) {
     theme_minimal() +
     labs(
       x = "PC1",
-      y = paste0(set_name, " score (ssGSEA)"),
+      y = paste0(tolower(set_name), " score (ssGSEA)"),
       title = paste0(set_name, " score vs PC1")
     )
   
@@ -404,7 +404,8 @@ fwrite(
 
 score_cor_df$score <- factor(
   score_cor_df$score,
-  levels = c("Platelet", "Erythroid", "Endothelial")
+  levels = c("Platelet", "Erythroid", "Endothelial"),
+  labels = c("platelet", "erythroid", "endothelial")
 )
 
 score_cor_df$PC <- factor(score_cor_df$PC, levels = pc_cols)

@@ -263,6 +263,7 @@ p_heat <- ggplot(cor_df, aes(x = PC, y = metric, fill = pearson_r)) +
   geom_tile(color = "white", linewidth = 0.3) +
   geom_text(aes(label = label), size = 3) +
   coord_fixed() +
+  scale_y_discrete(labels = function(metric_labels) tolower(metric_labels)) +
   scale_fill_gradient2(
     low = "#2166AC",
     mid = "white",
@@ -325,8 +326,8 @@ if (nrow(top_df) == 0) {
     padj_i <- top_df$pearson_padj[i]
     
     lab <- paste0(
-      "R = ", round(r_i, 2),
-      "\nP = ", format.pval(p_i, digits = 2),
+      "r = ", round(r_i, 2),
+      "\np = ", format.pval(p_i, digits = 2),
       "\nBH padj = ", format.pval(padj_i, digits = 2)
     )
     
@@ -337,7 +338,7 @@ if (nrow(top_df) == 0) {
       theme_minimal() +
       labs(
         title = paste0(metric_i, " vs ", pc_i),
-        x = metric_i,
+        x = tolower(metric_i),
         y = pc_i
       )
     
