@@ -81,6 +81,8 @@ import shutil
 import pandas as pd
 import math
 import csv
+import json
+import base64
 from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
@@ -150,6 +152,48 @@ def safe_num(x):
 
     return x
 
+def table_column(col):
+    """Presentation only: retain original TSVs and numeric precision."""
+    labels = {
+        "mean_q_last10bp": "Mean quality (last 10 bases)",
+        "min_mean_q_anypos": "Lowest mean positional quality",
+        "gc_peak_percent": "GC peak (%)", "max_adapter_percent": "Maximum adapter content (%)",
+        "mapq_min": "Minimum MAPQ", "read": "Read mate",
+        "fraction_spliced": "Spliced alignments (%)",
+        "fraction_annotated": "Annotated junctions (%)",
+        "fraction_novel": "Novel junctions (%)",
+        "unmapped_percent_total": "Unmapped (% of total)",
+        "classified_percent_unmapped": "Classified (% of unmapped)",
+        "microbial_percent_total": "Microbial (% of total)",
+        "microbial_percent_unmapped": "Microbial (% of unmapped)",
+        "dropoff_exon_side_mean_norm": "Mean exon coverage (normalized)",
+        "dropoff_intron_side_mean_norm": "Mean intron coverage (normalized)",
+        "dropoff_near_exon_-25bp_norm": "Exon coverage at -25 bp (normalized)",
+        "dropoff_near_intron_25bp_norm": "Intron coverage at +25 bp (normalized)",
+        "dropoff_near_intron_to_exon_ratio": "Intron / exon coverage ratio",
+    }
+    millions = {"input_reads": "Input reads", "uniquely_mapped_reads": "Uniquely mapped reads",
+                "total_unique_mapped_reads": "Qualifying mapped alignments",
+                "spliced_reads": "Spliced alignments", "sum_unique_support": "Unique junction support",
+                "sum_multi_support": "Multimapping junction support"}
+    thousands = {"total_junctions", "annotated_junctions", "novel_junctions"}
+    title = col.replace("_", " ").capitalize()
+    factor, fmt = 1, "{:,.2f}"
+    if col in millions:
+        title, factor, fmt = millions[col] + " (millions)", 1e-6, "{:,.3f}"
+    elif col in thousands:
+        title, factor, fmt = title + " (thousands)", 1e-3, "{:,.3f}"
+    elif "fraction" in col:
+        title, factor = title.replace("Fraction", "Percentage").replace("fraction", "percentage") + " (%)", 100
+    elif "percent" in col or col.endswith("_pct"):
+        title = title.replace(" percent", "").replace(" pct", "") + " (%)"
+    elif col.startswith("dropoff_"):
+        fmt = "{:,.4f}"
+    elif col == "mapq_min":
+        fmt = "{:,.0f}"
+    return labels.get(col, title), factor, fmt
+
+
 def df_to_mqc_yaml(df, out_yaml, section_id, section_name, description):
     if df.empty:
         print(f"Skipping empty section: {section_name}")
@@ -165,21 +209,36 @@ def df_to_mqc_yaml(df, out_yaml, section_id, section_name, description):
 
     for _, row in df.iterrows():
         sample = str(row["sample"])
+        # FASTQ mates are separate observations; do not overwrite R1 with R2.
+        if "read" in df.columns:
+            sample += " / " + str(row["read"])
         vals = {}
 
         for col in df.columns:
             if col == "sample":
                 continue
 
-            vals[str(col)] = safe_num(row[col])
+            value = safe_num(row[col])
+            vals[str(col)] = value * table_column(col)[1] if isinstance(value, (int, float)) else value
 
         data[sample] = vals
 
     with open(out_yaml, "w") as out:
         out.write(f'id: "{section_id}"\n')
+        out.write(f'section_anchor: "{section_id}"\n')
         out.write(f'section_name: "{section_name}"\n')
         out.write(f'description: "{description}"\n')
         out.write('plot_type: "table"\n')
+        if section_id == "custom_kraken_microbiome_summary":
+            out.write('parent_id: "custom_kraken"\nparent_name: "Kraken2 Microbial Screening"\n')
+        out.write("headers:\n")
+        for col in df.columns:
+            if col == "sample":
+                continue
+            title, _, fmt = table_column(col)
+            out.write(f'  {json.dumps(str(col))}:\n')
+            out.write(f'    title: {json.dumps(title)}\n')
+            out.write(f'    format: {json.dumps(fmt)}\n')
         out.write("pconfig:\n")
         out.write(f'  id: "{section_id}_table"\n')
         out.write(f'  title: "{section_name}"\n')
@@ -230,7 +289,7 @@ def write_splice_cohort(df):
     df["condition"] = df["condition"].astype(str)
     conditions = list(dict.fromkeys(df["condition"]))
     groups = [
-        df.loc[df["condition"] == condition, "fraction_spliced"].to_numpy(dtype=float)
+        100 * df.loc[df["condition"] == condition, "fraction_spliced"].to_numpy(dtype=float)
         for condition in conditions
     ]
     means = np.array([values.mean() for values in groups])
@@ -281,16 +340,16 @@ def write_splice_cohort(df):
             zorder=3,
         )
 
-    label_heights = [min(1.075, values.max() + 0.055) for values in groups]
+    label_heights = [min(107.5, values.max() + 5.5) for values in groups]
     for x, mean, label_y in zip(x_positions, means, label_heights):
-        ax.text(x, label_y, f"{mean:.4f}", ha="center", va="bottom", fontsize=15, fontweight="bold")
+        ax.text(x, label_y, f"{mean:.2f}%", ha="center", va="bottom", fontsize=15, fontweight="bold")
 
     ax.set_xlim(0.4, len(conditions) + 0.6)
-    ax.set_ylim(0.0, 1.12)
+    ax.set_ylim(0.0, 112)
     ax.set_xticks(x_positions, conditions)
-    ax.set_yticks(np.arange(0, 1.01, 0.20))
-    ax.set_yticks(np.arange(0, 1.01, 0.05), minor=True)
-    ax.set_ylabel("Fraction of uniquely mapped reads crossing splice junctions")
+    ax.set_yticks(np.arange(0, 101, 20))
+    ax.set_yticks(np.arange(0, 101, 5), minor=True)
+    ax.set_ylabel("Qualifying mapped alignments crossing splice junctions (%)")
     ax.set_xlabel("Condition")
     ax.spines[["top", "right"]].set_visible(False)
     for side in ["left", "bottom"]:
@@ -339,8 +398,8 @@ df_to_mqc_yaml(
     splice_read_fractions,
     os.path.join(custom_dir, "custom_splice_read_fractions_mqc.yaml"),
     "custom_splice_read_fractions",
-    "Splice Read Fractions",
-    "Fraction of primary, mapped, non-duplicate, QC-passing reads with MAPQ at least 30 that cross one or more splice junctions."
+    "Spliced Read Percentages",
+    "Percentage of primary, mapped, non-duplicate, QC-passing alignments with MAPQ at least 30 that cross one or more splice junctions. Counts are in millions."
 )
 
 splice_plot = os.path.join(outdir, "splice_junctions", "splice_read_fractions.png")
@@ -747,7 +806,21 @@ if kraken_enabled:
                 output = os.path.join(kraken_visualizations, stem + ".png")
                 fig.savefig(output, dpi=300, bbox_inches="tight")
                 plt.close(fig)
-                shutil.copy2(output, os.path.join(custom_dir, stem + "_mqc.png"))
+                # Only the combined overview belongs in the report. Individual
+                # panels remain available as standalone source figures.
+                if stem == "kraken_visualization_overview":
+                    # HTML custom content supports shared parents in MultiQC
+                    # 1.28; raw image sections are otherwise separate modules.
+                    encoded = base64.b64encode(Path(output).read_bytes()).decode("ascii")
+                    with open(os.path.join(custom_dir, stem + "_mqc.html"), "w") as handle:
+                        handle.write('<!--\nid: kraken_visualization_overview\n'
+                                     'section_anchor: kraken_visualization_overview\n'
+                                     'parent_id: custom_kraken\n'
+                                     'parent_name: "Kraken2 Microbial Screening"\n'
+                                     'section_name: "Kraken2 overview"\n-->\n')
+                        handle.write('<img alt="Kraken2 four-panel overview" '
+                                     'style="max-width:100%;height:auto" '
+                                     f'src="data:image/png;base64,{encoded}">\n')
 
             fig, axes = plt.subplots(2, 2, figsize=(19, 14), constrained_layout=True)
             draw_stacked(axes[0, 0], full_percentages, "A. Complete-library composition")

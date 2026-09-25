@@ -142,6 +142,18 @@ cat > "$MULTIQC_CONFIG" <<EOF
 title: "HPC RNA-seq QC Report"
 subtitle: "Standard tool outputs plus custom QC metrics"
 ignore_images: false
+custom_content:
+  order:
+    - custom_fastqc_parsed_metrics
+    - custom_mapping_summary
+    - custom_splice_junction_summary
+    - custom_splice_read_fractions
+    - splice_read_fractions
+    - custom_insert_size_distribution_summary
+    - custom_exon_intron_dropoff_summary
+    - custom_kraken
+    - custom_kraken_microbiome_summary
+    - kraken_visualization_overview
 EOF
 
 echo "Created MultiQC config:"
