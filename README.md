@@ -76,7 +76,7 @@ to skip counting or use a separate quantifier.
 Required HPC inputs:
 
 - FASTQ files for each sample when STAR or FastQC is enabled (R1 for SE; R1/R2 for PE).
-- An existing STAR index directory when STAR is enabled; index building is external.
+- An existing STAR index directory when STAR is enabled; see [Creating a STAR index](#creating-a-star-index).
 - Existing BAM files when STAR is disabled and BAM-based modules are enabled.
 - Existing STAR `Log.final.out` files when STAR is disabled and mapping/Kraken is enabled.
 - Existing STAR unmapped mate FASTQs beside the final log when STAR is disabled and Kraken is enabled.
@@ -197,6 +197,89 @@ names is not compatible with annotations using `chr1`/`chr2` until one side is
 made consistent. This is a reference-compatibility requirement, not a
 STAR-specific one.
 
+### Creating a STAR index
+
+Build the index once before submitting the QC workflow. `STAR_INDEX` is a
+**directory containing several generated files**, not a single index file. The
+pipeline uses this directory for every sample; it does not build it automatically.
+
+You need two reference files:
+
+- **Genome FASTA** (`.fa` or `.fasta`): the genomic DNA sequences for your organism.
+  Select genome sequences, not transcript/cDNA or protein sequences.
+- **Gene annotation GTF** (`.gtf`): exon and transcript annotations for the same
+  genome assembly. Use the same GTF for the pipeline's `GTF` setting.
+
+For human data, the [GENCODE human downloads](https://www.gencodegenes.org/human/)
+page provides both files. Choose a release appropriate to your study; for a
+GRCh38 primary-assembly reference, pair **Genome sequence, primary assembly
+(GRCh38)** with **Comprehensive gene annotation — PRI — GTF** from that release.
+GENCODE also provides [mouse references](https://www.gencodegenes.org/mouse/).
+Keep the reference release and chromosome naming consistent across FASTA, GTF,
+and downstream annotations. Record the release and download URLs for reuse.
+
+Download the selected files using the links on the release page. If they are
+compressed, decompress them first (replace these example filenames):
+
+```bash
+gzip -dc reference.genome.fa.gz > reference.genome.fa
+gzip -dc reference.annotation.gtf.gz > reference.annotation.gtf
+```
+
+For example, save the following as `build_star_index.sbatch`, edit the three
+absolute paths, and submit it with `sbatch build_star_index.sbatch`. The resource
+request is an example for a human reference; adjust it to your cluster and
+reference size. The software module matches the pipeline's alignment module.
+
+```bash
+#!/usr/bin/env bash
+#SBATCH --job-name=star_index
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=60G
+#SBATCH --time=24:00:00
+#SBATCH --output=star_index_%j.out
+#SBATCH --error=star_index_%j.err
+
+set -euo pipefail
+module load env/software/doduo
+module load STAR/2.7.11b-GCC-13.2.0
+
+GENOME_FASTA="/absolute/path/to/reference.genome.fa"
+REFERENCE_GTF="/absolute/path/to/reference.annotation.gtf"
+INDEX_DIR="/absolute/path/to/STAR_index"
+READ_LENGTH=150
+
+mkdir -p "$INDEX_DIR"
+STAR --version > "$INDEX_DIR/STAR.version.txt"
+STAR --runMode genomeGenerate \
+    --runThreadN "${SLURM_CPUS_PER_TASK:-8}" \
+    --genomeDir "$INDEX_DIR" \
+    --genomeFastaFiles "$GENOME_FASTA" \
+    --sjdbGTFfile "$REFERENCE_GTF" \
+    --sjdbOverhang "$((READ_LENGTH - 1))" \
+    --outFileNamePrefix "$INDEX_DIR/"
+```
+
+Set `READ_LENGTH` to the maximum read length being aligned. For 150-base reads,
+`--sjdbOverhang` is 149; for paired-end data, use the length of one mate, not the
+sum of both mates. These indexing options are documented in the
+[STAR manual](https://github.com/alexdobin/STAR/blob/master/doc/STARmanual.pdf).
+
+Wait for successful completion and check the job log and index `Log.out` for
+errors. The completed directory contains `Genome`, `SA`, `SAindex`,
+`genomeParameters.txt`, and other STAR files; retain the entire directory.
+Then set the HPC config to the index and matching annotation:
+
+```bash
+STAR_INDEX="/absolute/path/to/STAR_index"
+GTF="/absolute/path/to/reference.annotation.gtf"
+```
+
+Use the same STAR version to build and use the index. Build a separate index
+directory when changing references instead of overwriting an index used by
+running jobs. Index generation is a separate preparation step, not a per-sample
+module in the QC submission chain.
+
 ### HPC Module Reference
 
 Every module receives the config file as its first argument. Modules that work
@@ -211,27 +294,27 @@ The shell modules follow the same structure: config loading, required inputs,
 paths, software environment, and sample processing. STAR/HTSeq can write to
 custom locations through `STAR_OUTDIR` and `HTSEQ_OUTDIR`.
 
-| Module | Required file inputs | Main outputs | Function |
-|---|---|---|---|
-| `Star_Alignment.sh` | FASTQ R1 (plus R2 for PE), `STAR_INDEX`, `GTF` | `STAR_OUTDIR/<sample>/<sample>.` followed by `Aligned.sortedByCoord.out.bam`, `Log.final.out`, `SJ.out.tab`, and unmapped mates | Runs the supplied two-pass STAR alignment settings separately for each sample; accepts gzip or plain FASTQs. Does not generate transcriptome BAMs. |
-| `HTSeq_Counts.sh` | Full genomic BAM, `GTF` | `HTSEQ_OUTDIR/<sample>/<sample>_htseq_counts.txt` and `.complete` run record | Counts each sample separately with position order, nonunique=none, and configurable strandedness. Aggregation combines the count files. |
-| `Downsample.sh` | Valid BAM with `@SQ` header records | `downsampled_bams/manifests/<run-id>/<sample>.tsv`; downsampled BAMs only for samples above the target | Runs independently per sample using deterministic `samtools view -s` sampling. Samples at or below the target retain their original BAM path. Duplication and gene-body coverage read only their sample's atomic manifest; aggregation creates the cohort manifest later. |
-| `GTF_to_BED12.sh` | Config `GTF` | `annotation/<gtf-prefix>.genePred`, `.bed12.bed`, and `annotation/BED12.path.txt` | Converts the reference GTF to validated BED12 annotation for RSeQC. The path-record file tells downstream modules the exact BED12 filename generated. |
-| `Make_Dropoff_Bins.sh` | Config `GTF` | `annotation/exon_intron_bins/exon_intron_bins.bed` and the raw transcript-level bin BED | Builds deduplicated 50 bp exon- and intron-side bins around exon–intron boundaries for drop-off QC. |
-| `Fastqc.sh` | Samplesheet `fastq_r1`; also `fastq_r2` for `PE` samples | `fastqc/raw/<sample>/` FastQC HTML/ZIP reports and `<sample>.fastqc_parsed_metrics.tsv` | Runs FastQC and extracts last-10-base quality, minimum positional quality, GC peak, and maximum adapter content. |
-| `Map.sh` | Samplesheet `star_log` | `mapping/<sample>/<sample>.Log.final.out` and `.mapping_summary.tsv` | Copies the STAR final log and extracts mapping, multimapping, and unmapped-read metrics. |
-| `Duplication.sh` | Valid BAM with `@SQ` header records | `duplication/<sample>/<sample>.markdup.metrics.txt` and `.duplication_summary.tsv` | Runs Picard MarkDuplicates and records the alignment-based duplicate fraction. A non-coordinate-sorted input is sorted temporarily. |
-| `Insert_Size_Distribution_Genomic.sh` | Samplesheet `bam` for `PE` samples without `transcriptome_bam` | `insert_size_distribution/<sample>/` histogram TSV, summary TSV, and histogram PNG | Uses genomic-coordinate paired-end spans to derive insert sizes and summarize cfRNA-relevant size windows and 167 bp peak enrichment. |
-| `Insert_Size_Distribution_Transcriptome.sh` | Samplesheet `transcriptome_bam` for `PE` samples | The same `insert_size_distribution/<sample>/` layout, plus classification and ambiguous-pair-example TSVs | Uses STAR transcript-coordinate alignments. It collapses placements by original read pair, accepts one distinct absolute TLEN, and excludes pairs with conflicting transcript-placement lengths. |
-| `Genebody.sh` | Valid BAM; generated `annotation/BED12.path.txt` and referenced BED12 | `gene_body_coverage/<sample>.geneBodyCoverage.txt` and RSeQC companion outputs | Builds a BAM index and runs RSeQC gene-body coverage to assess 5′–3′ coverage bias. A non-coordinate-sorted input is sorted temporarily. |
-| `Read_Distribution.sh` | Valid BAM; generated `annotation/BED12.path.txt` and referenced BED12 | `read_distribution/<sample>/<sample>.read_distribution.txt` | Runs RSeQC feature distribution to quantify reads in CDS exons, UTR exons, introns, and intergenic regions. A non-coordinate-sorted input is sorted temporarily. |
-| `Splice_Junction.sh` | Valid BAM and `condition`; optional STAR `sj_tab` and `star_log` | Per-sample optional STAR junction summary and BAM-derived spliced-read-fraction TSVs in `splice_junctions/<sample>/` | Calculates the fraction of primary, mapped, non-duplicate, QC-passing BAM alignments with MAPQ ≥30 that cross a splice junction. Cohort summaries and plots are created during custom MultiQC preparation. |
-| `Strandedness.sh` | Valid BAM; config `EXON_BED` | `strandedness/<sample>/<sample>_RSeQC_output_all.txt` and `_RSeQC_output.txt` | Runs RSeQC library-orientation inference and writes a compact strandedness result. |
-| `Dropoff.sh` | Valid BAM; generated `annotation/exon_intron_bins/exon_intron_bins.bed` | `dropoff/<sample>/` bin-coverage TSV, normalized drop-off profile TSV, and PNG | Counts split-read coverage across exon–intron boundary bins and visualizes normalized exon-to-intron drop-off. A non-coordinate-sorted input is sorted temporarily for `bedtools coverage -sorted`. |
-| `Kraken.sh` | Samplesheet `star_log`; STAR `Unmapped.out.mate1` (and `Unmapped.out.mate2` for `PE`) | `kraken/results/<sample>/` Kraken report, compressed per-fragment calls, microbial summary, and taxon TSVs | Classifies STAR-unmapped reads against the configured Kraken2 database. Single-end samples use mate 1; paired-end samples use mate 1 and mate 2 with Kraken2 paired mode after matching-record validation. Cohort plots and the MultiQC section are created by `Make_multiqc_custom_content.sh`. |
-| `Make_multiqc_custom_content.sh` | Existing QC TSV/PNG outputs under `OUTDIR` | Splice cohort tables and plots; `multiqc/custom_content/` MultiQC YAML tables, compact drop-off TSV, and combined PNGs | Assembles current-run splice results and converts pipeline-specific metrics and plots into MultiQC custom-content files. It is called automatically by `Multiqc.sh`. |
-| `Multiqc.sh` | Existing QC outputs under `OUTDIR`; `Make_multiqc_custom_content.sh` | `multiqc/hpc_qc_multiqc_report.html`, report-data directory, staged input, and config files | Stages standard and custom outputs, then generates the combined MultiQC report. |
-| `Aggregate.sh` | Resolved `SAMPLESHEET`; available QC outputs; optional MultiQC report; current-run HTSeq counts when enabled | `summary/hpc_qc_summary.tsv`, `summary/hpc_qc_transfer_bundle.zip`, combined downsampling manifest when enabled, and complete HTSeq matrices | Combines QC metrics and successful current-run downsampling manifests and packages the MultiQC report/data. With HTSeq enabled, combines all samples' counts or includes a missing/invalid-count notice. With HTSeq disabled, produces the QC bundle without counts. |
+| Module                                      | Required file inputs                                                                                                  | Main outputs                                                                                                                                   | Function                                                                                                                                                                                                                                                                                         |
+| :------------------------------------------ | :-------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Star_Alignment.sh`                         | FASTQ R1 (plus R2 for PE), `STAR_INDEX`, `GTF`                                                                        | Prefix: `STAR_OUTDIR/<sample>/<sample>.`<br>Files: `Aligned.sortedByCoord.out.bam`,<br>`Log.final.out`, `SJ.out.tab`,<br>and unmapped mates    | Runs the supplied two-pass STAR alignment settings separately for each sample; accepts gzip or plain FASTQs. Does not generate transcriptome BAMs.                                                                                                                                               |
+| `HTSeq_Counts.sh`                           | Full genomic BAM, `GTF`                                                                                               | `HTSEQ_OUTDIR/<sample>/<sample>_htseq_counts.txt` and `.complete` run record                                                                   | Counts each sample separately with position order, nonunique=none, and configurable strandedness. Aggregation combines the count files.                                                                                                                                                          |
+| `Downsample.sh`                             | Valid BAM with `@SQ` header records                                                                                   | `downsampled_bams/manifests/<run-id>/<sample>.tsv`;<br>downsampled BAMs only for samples above the target                                      | Runs independently per sample using deterministic `samtools view -s` sampling. Samples at or below the target retain their original BAM path. Duplication and gene-body coverage read only their sample's atomic manifest; aggregation creates the cohort manifest later.                        |
+| `GTF_to_BED12.sh`                           | Config `GTF`                                                                                                          | `annotation/<gtf-prefix>.genePred`, `.bed12.bed`, and `annotation/BED12.path.txt`                                                              | Converts the reference GTF to validated BED12 annotation for RSeQC. The path-record file tells downstream modules the exact BED12 filename generated.                                                                                                                                            |
+| `Make_Dropoff_Bins.sh`                      | Config `GTF`                                                                                                          | `annotation/exon_intron_bins/exon_intron_bins.bed` and the raw transcript-level bin BED                                                        | Builds deduplicated 50 bp exon- and intron-side bins around exon–intron boundaries for drop-off QC.                                                                                                                                                                                              |
+| `Fastqc.sh`                                 | Samplesheet `fastq_r1`;<br>also `fastq_r2` for `PE` samples                                                           | `fastqc/raw/<sample>/` FastQC HTML/ZIP reports and `<sample>.fastqc_parsed_metrics.tsv`                                                        | Runs FastQC and extracts last-10-base quality, minimum positional quality, GC peak, and maximum adapter content.                                                                                                                                                                                 |
+| `Map.sh`                                    | Samplesheet `star_log`                                                                                                | `mapping/<sample>/<sample>.Log.final.out` and `.mapping_summary.tsv`                                                                           | Copies the STAR final log and extracts mapping, multimapping, and unmapped-read metrics.                                                                                                                                                                                                         |
+| `Duplication.sh`                            | Valid BAM with `@SQ` header records                                                                                   | `duplication/<sample>/<sample>.markdup.metrics.txt` and `.duplication_summary.tsv`                                                             | Runs Picard MarkDuplicates and records the alignment-based duplicate fraction. A non-coordinate-sorted input is sorted temporarily.                                                                                                                                                              |
+| `Insert_Size_Distribution_Genomic.sh`       | Samplesheet `bam` for `PE` samples without `transcriptome_bam`                                                        | `insert_size_distribution/<sample>/` histogram TSV, summary TSV, and histogram PNG                                                             | Uses genomic-coordinate paired-end spans to derive insert sizes and summarize cfRNA-relevant size windows and 167 bp peak enrichment.                                                                                                                                                            |
+| `Insert_Size_Distribution_Transcriptome.sh` | Samplesheet `transcriptome_bam` for `PE` samples                                                                      | The same `insert_size_distribution/<sample>/` layout, plus classification and ambiguous-pair-example TSVs                                      | Uses STAR transcript-coordinate alignments. It collapses placements by original read pair, accepts one distinct absolute TLEN, and excludes pairs with conflicting transcript-placement lengths.                                                                                                 |
+| `Genebody.sh`                               | Valid BAM;<br>generated `annotation/BED12.path.txt` and referenced BED12                                              | `gene_body_coverage/<sample>.geneBodyCoverage.txt` and RSeQC companion outputs                                                                 | Builds a BAM index and runs RSeQC gene-body coverage to assess 5′–3′ coverage bias. A non-coordinate-sorted input is sorted temporarily.                                                                                                                                                         |
+| `Read_Distribution.sh`                      | Valid BAM;<br>generated `annotation/BED12.path.txt` and referenced BED12                                              | `read_distribution/<sample>/<sample>.read_distribution.txt`                                                                                    | Runs RSeQC feature distribution to quantify reads in CDS exons, UTR exons, introns, and intergenic regions. A non-coordinate-sorted input is sorted temporarily.                                                                                                                                 |
+| `Splice_Junction.sh`                        | Valid BAM and `condition`;<br>optional STAR `sj_tab` and `star_log`                                                   | Per-sample optional STAR junction summary and BAM-derived spliced-read-fraction TSVs in `splice_junctions/<sample>/`                           | Calculates the fraction of primary, mapped, non-duplicate, QC-passing BAM alignments with MAPQ ≥30 that cross a splice junction. Cohort summaries and plots are created during custom MultiQC preparation.                                                                                       |
+| `Strandedness.sh`                           | Valid BAM;<br>config `EXON_BED`                                                                                       | `strandedness/<sample>/<sample>_RSeQC_output_all.txt` and `_RSeQC_output.txt`                                                                  | Runs RSeQC library-orientation inference and writes a compact strandedness result.                                                                                                                                                                                                               |
+| `Dropoff.sh`                                | Valid BAM;<br>generated `annotation/exon_intron_bins/exon_intron_bins.bed`                                            | `dropoff/<sample>/` bin-coverage TSV, normalized drop-off profile TSV, and PNG                                                                 | Counts split-read coverage across exon–intron boundary bins and visualizes normalized exon-to-intron drop-off. A non-coordinate-sorted input is sorted temporarily for `bedtools coverage -sorted`.                                                                                              |
+| `Kraken.sh`                                 | Samplesheet `star_log`;<br>STAR `Unmapped.out.mate1` (and `Unmapped.out.mate2` for `PE`)                              | `kraken/results/<sample>/` Kraken report, compressed per-fragment calls, microbial summary, and taxon TSVs                                     | Classifies STAR-unmapped reads against the configured Kraken2 database. Single-end samples use mate 1; paired-end samples use mate 1 and mate 2 with Kraken2 paired mode after matching-record validation. Cohort plots and the MultiQC section are created by `Make_multiqc_custom_content.sh`. |
+| `Make_multiqc_custom_content.sh`            | Existing QC TSV/PNG outputs under `OUTDIR`                                                                            | Splice cohort tables and plots;<br>`multiqc/custom_content/` MultiQC YAML tables, compact drop-off TSV, and combined PNGs                      | Assembles current-run splice results and converts pipeline-specific metrics and plots into MultiQC custom-content files. It is called automatically by `Multiqc.sh`.                                                                                                                             |
+| `Multiqc.sh`                                | Existing QC outputs under `OUTDIR`;<br>`Make_multiqc_custom_content.sh`                                               | `multiqc/hpc_qc_multiqc_report.html`, report-data directory, staged input, and config files                                                    | Stages standard and custom outputs, then generates the combined MultiQC report.                                                                                                                                                                                                                  |
+| `Aggregate.sh`                              | Resolved `SAMPLESHEET`;<br>available QC outputs;<br>optional MultiQC report;<br>current-run HTSeq counts when enabled | `summary/hpc_qc_summary.tsv`<br>`summary/hpc_qc_transfer_bundle.zip`<br>Combined downsampling manifest when enabled<br>Complete HTSeq matrices | Combines QC metrics and successful current-run downsampling manifests and packages the MultiQC report/data. With HTSeq enabled, combines all samples' counts or includes a missing/invalid-count notice. With HTSeq disabled, produces the QC bundle without counts.                             |
 
 ### Example HPC Config
 
