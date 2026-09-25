@@ -45,7 +45,8 @@ DOWNSAMPLE_MANIFEST_DIR="${OUTDIR}/downsampled_bams/manifests/${HPC_RUN_ID:-manu
 # -----------------------------
 module purge
 module load picard/3.0.0-Java-17
-module load SAMtools
+# Match RSeQC's foss/2023a compiler toolchain.
+module load SAMtools/1.18-GCC-12.3.0
 module load RSeQC/5.0.1-foss-2023a
 
 command -v samtools >/dev/null 2>&1 || {

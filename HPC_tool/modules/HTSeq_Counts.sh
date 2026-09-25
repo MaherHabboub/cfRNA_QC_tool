@@ -49,7 +49,8 @@ HTSEQ_OUTDIR="${HTSEQ_OUTDIR:-${OUTDIR}/htseq}"
 module purge
 module load env/software/doduo
 module load HTSeq/2.0.7-foss-2023a
-module load SAMtools/1.19.2-GCC-13.2.0
+# Match HTSeq's foss/2023a compiler toolchain.
+module load SAMtools/1.18-GCC-12.3.0
 
 command -v htseq-count >/dev/null || { echo "ERROR: htseq-count is unavailable" >&2; exit 1; }
 command -v samtools >/dev/null || { echo "ERROR: samtools is unavailable" >&2; exit 1; }

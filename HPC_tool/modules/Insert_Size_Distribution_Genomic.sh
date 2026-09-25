@@ -35,7 +35,8 @@ module purge
 module load picard/3.0.0-Java-17
 module load BEDTools/2.31.1-GCC-13.2.0
 module load Anaconda3/2024.06-1
-module load SAMtools
+# Match BEDTools' GCC/13.2.0 compiler toolchain.
+module load SAMtools/1.19.2-GCC-13.2.0
 
 command -v samtools >/dev/null 2>&1 || {
     echo "ERROR: samtools is unavailable after loading SAMtools." >&2

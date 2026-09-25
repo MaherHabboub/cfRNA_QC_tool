@@ -34,7 +34,8 @@ RESULT_DIR="${OUTDIR}/read_distribution"
 # -----------------------------
 module purge
 module load RSeQC/5.0.1-foss-2023a
-module load SAMtools
+# Match RSeQC's foss/2023a compiler toolchain.
+module load SAMtools/1.18-GCC-12.3.0
 
 command -v samtools >/dev/null 2>&1 || {
     echo "ERROR: samtools is unavailable after loading SAMtools." >&2
