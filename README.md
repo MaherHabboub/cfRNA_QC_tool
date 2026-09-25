@@ -354,6 +354,13 @@ retained, while `KRAKEN_TOP_GENERA` controls the cohort visualisation. For `PE`
 samples, STAR must have produced both `Unmapped.out.mate1` and
 `Unmapped.out.mate2` in the directory containing that sample's `star_log`.
 
+#### Building a Kraken2 database
+
+If you need a database, the standalone [Kraken_DB workflow](Kraken_DB/README.md)
+downloads references, builds Kraken2's index, and validates it in one configured
+storage location. Its README covers setup, submission, restarting, software
+versions, build dates, and connecting the validated database to the HPC tool.
+
 Use absolute paths where possible, especially on HPC systems. Relative sample
 file paths resolve from the samplesheet directory; relative config input/output
 paths resolve from the directory where the submitter is invoked.
