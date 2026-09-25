@@ -4,7 +4,7 @@
 # Output:
 #   - counts_deseq2_normalized.tsv
 #   - counts_deseq2_log2norm_plus1.tsv
-#   - QC plots before/after normalization
+#   - QC plots and compact per-sample plotting data for the HTML report
 
 suppressPackageStartupMessages({
   library(optparse)
@@ -125,6 +125,8 @@ lib_df <- data.frame(
   normalized = as.numeric(lib_norm)
 )
 
+fwrite(lib_df, file.path(out_dir, "qc_librarysize.tsv"), sep = "\t")
+
 p_lib <- ggplot(lib_df, aes(x = raw, y = normalized, label = sample)) +
   geom_point(size = 2) +
   theme_minimal() +
@@ -155,6 +157,20 @@ raw_long <- melt(
 # Remove zero-count genes for readability
 raw_long_nz <- raw_long[value > 0]
 
+# Store only 128 points per sample for interactive report curves, rather than
+# embedding one point per gene in the HTML report.
+save_density_curves <- function(long_data, path) {
+  curves <- rbindlist(lapply(sample_cols, function(sample_name) {
+    values <- long_data[sample == sample_name, value]
+    if (length(values) < 2L) return(NULL)
+    curve <- stats::density(values, n = 128L)
+    data.table(sample = sample_name, value = curve$x, density = curve$y)
+  }))
+  fwrite(curves, path, sep = "\t")
+}
+
+save_density_curves(raw_long_nz, file.path(out_dir, "qc_density_before_nonzero.tsv"))
+
 p_density_before <- ggplot(raw_long_nz, aes(x = value, color = sample)) +
   geom_density(linewidth = 1) +
   theme_minimal() +
@@ -183,6 +199,8 @@ norm_long <- melt(
 
 # Remove zero-expression genes for readability
 norm_long_nz <- norm_long[value > 0]
+
+save_density_curves(norm_long_nz, file.path(out_dir, "qc_density_after_nonzero.tsv"))
 
 p_density_after <- ggplot(norm_long_nz, aes(x = value, color = sample)) +
   geom_density(linewidth = 1) +

@@ -180,7 +180,6 @@ p <- ggplot(
   aes(x = Y_panel_mean_log2norm, y = XIST_log2norm, label = sample_id)
 ) +
   geom_point(size = 2) +
-  geom_text(vjust = -0.6, size = 3) +
   coord_cartesian(
     xlim = c(0, x_upper),
     ylim = c(0, y_upper),

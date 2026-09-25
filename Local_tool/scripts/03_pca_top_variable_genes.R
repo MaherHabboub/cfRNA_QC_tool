@@ -6,6 +6,7 @@
 # Output:
 #   - pca_scores.tsv
 #   - pca_scores_with_metadata.tsv, if metadata is provided
+#   - pca_metadata_plot_columns.tsv, listing plotted metadata columns
 #   - pca_variance_explained.tsv
 #   - pca_object.rds
 #   - pca_scree.png
@@ -188,7 +189,6 @@ if (!all(c("PC1", "PC2") %in% names(scores))) {
 
 p_scatter <- ggplot(scores, aes(x = PC1, y = PC2)) +
   geom_point(size = 2) +
-  geom_text(aes(label = sample_id), vjust = -0.7, size = 3) +
   labs(
     title = "PCA (top variable genes): PC1 vs PC2",
     x = paste0("PC1 (variance explained: ", round(100 * ve[1], 1), "%)"),
@@ -203,8 +203,10 @@ ggsave(
   height = 5
 )
 
-# ---- optional metadata-annotated PCA plots ----
+# ---- optional metadata-colored PCA plots ----
 metadata_used <- FALSE
+metadata_columns_path <- file.path(out_dir, "pca_metadata_plot_columns.tsv")
+fwrite(data.table(metadata_column = character()), metadata_columns_path, sep = "\t")
 
 if (!is.null(metadata_path) && metadata_path != "") {
   
@@ -250,6 +252,7 @@ if (!is.null(metadata_path) && metadata_path != "") {
           
           metadata_plot_dir <- file.path(out_dir, "metadata_plots")
           dir.create(metadata_plot_dir, recursive = TRUE, showWarnings = FALSE)
+          generated_metadata_cols <- character()
           
           for (meta_col in meta_cols) {
             
@@ -263,7 +266,6 @@ if (!is.null(metadata_path) && metadata_path != "") {
             # ggplot handles both; numeric gets continuous color scale.
             p_meta <- ggplot(scores_meta, aes(x = PC1, y = PC2, color = .data[[meta_col]])) +
               geom_point(size = 3) +
-              geom_text(aes(label = sample_id), vjust = -0.7, size = 3, color = "black") +
               labs(
                 title = paste0("PCA (top variable genes): colored by ", meta_col),
                 x = paste0("PC1 (variance explained: ", round(100 * ve[1], 1), "%)"),
@@ -280,7 +282,10 @@ if (!is.null(metadata_path) && metadata_path != "") {
               width = 7,
               height = 5
             )
+            generated_metadata_cols <- c(generated_metadata_cols, meta_col)
           }
+
+          fwrite(data.table(metadata_column = generated_metadata_cols), metadata_columns_path, sep = "\t")
           
           metadata_used <- TRUE
         }

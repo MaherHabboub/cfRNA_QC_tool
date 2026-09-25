@@ -15,6 +15,7 @@ dependencies:
   - r-ggplot2
   - r-knitr
   - r-optparse
+  - r-plotly
   - r-rmarkdown
   - r-scales
   - r-tidyr
