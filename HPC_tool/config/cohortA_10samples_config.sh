@@ -10,7 +10,8 @@ CLUSTER_MODULE="cluster/doduo"
 CLUSTER_ENV_MODULE="env/software/doduo"
 
 # Optional upstream processing; both default to yes, including for old configs.
-# Set STAR_ENABLED=no to use the existing alignment paths in the samplesheet.
+# Supplied bam paths always take precedence; STAR runs only for missing BAMs.
+# Set STAR_ENABLED=no to disable alignment entirely.
 # Set HTSEQ_ENABLED=no to skip counting and produce a QC-only transfer bundle.
 STAR_ENABLED="yes"
 HTSEQ_ENABLED="yes"

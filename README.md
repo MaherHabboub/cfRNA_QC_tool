@@ -70,16 +70,17 @@ setup. Installing the Conda environment alone does not replace `module load`.
 
 The HPC workflow can align FASTQs with STAR and quantify each sample with
 HTSeq. Both are enabled by default and independently optional. Set
-`STAR_ENABLED="no"` to use existing alignment files, and `HTSEQ_ENABLED="no"`
-to skip counting or use a separate quantifier.
+`STAR_ENABLED="no"` to disable alignment entirely, and `HTSEQ_ENABLED="no"`
+to skip counting or use a separate quantifier. A supplied genomic `bam` always
+takes precedence: STAR runs only for samples without a BAM, even when enabled.
 
 Required HPC inputs:
 
-- FASTQ files for each sample when STAR or FastQC is enabled (R1 for SE; R1/R2 for PE).
-- An existing STAR index directory when STAR is enabled; see [Creating a STAR index](#creating-a-star-index).
-- Existing BAM files when STAR is disabled and BAM-based modules are enabled.
-- Existing STAR `Log.final.out` files when STAR is disabled and mapping/Kraken is enabled.
-- Existing STAR unmapped mate FASTQs beside the final log when STAR is disabled and Kraken is enabled.
+- FASTQ files for samples needing STAR alignment or when FastQC is enabled (R1 for SE; R1/R2 for PE).
+- An existing STAR index directory when any sample needs alignment; see [Creating a STAR index](#creating-a-star-index).
+- Existing BAM files for samples that will not run STAR when BAM-based modules are enabled.
+- Existing STAR `Log.final.out` files for reused alignments when mapping/Kraken is enabled.
+- Existing STAR unmapped mate FASTQs beside the final log for reused alignments when Kraken is enabled.
 - Optional existing STAR `SJ.out.tab` files for the STAR junction-table summary.
 - A reference GTF annotation file.
 - A reference exon BED file when RSeQC strandedness inference is enabled.
@@ -146,9 +147,9 @@ Each job waits only for the jobs that produce its required files:
 | Read distribution | GTF-to-BED12 plus that sample's STAR job, if enabled |
 | Drop-off analysis | Drop-off-bin creation plus that sample's STAR job, if enabled |
 
-With `STAR_ENABLED="no"`, supplied alignment files satisfy alignment
-prerequisites without a scheduler wait. Providing BAM paths does not
-automatically disable STAR. Jobs with no dependencies are immediately eligible
+Supplied BAM paths skip STAR for that sample and satisfy alignment
+prerequisites without a scheduler wait, even with `STAR_ENABLED="yes"`.
+Mixed sheets can reuse existing BAMs and align the remaining samples. Jobs with no dependencies are immediately eligible
 for scheduling; actual start times depend on available Slurm resources.
 Only duplication and gene-body coverage use the BAM selected by downsampling;
 HTSeq and other genomic-BAM consumers use the full supplied or generated BAM.
@@ -496,9 +497,12 @@ sample_02	/path/S2_R1.fastq.gz	/path/S2_R2.fastq.gz	/path/S2.bam	/path/S2.Log.fi
 ```
 
 For single-end data, set `layout=SE` and use `NA`, `.`, or an empty field for
-the unused mate. The submitter normalizes missing fields to `NA`. With STAR
-enabled, supplied genomic BAM/log/junction paths are replaced in the runtime
-sheet by generated STAR paths; the original input sheet and files are unchanged.
+the unused mate. The submitter normalizes missing fields to `NA`. Supplied
+genomic BAM/log/junction paths are preserved. With STAR enabled, only samples
+whose `bam` is missing (`NA`, `.`, empty, or omitted) receive generated STAR
+paths in the runtime sheet. A supplied BAM must exist and be readable; an
+invalid path stops submission rather than triggering realignment. A supplied
+`transcriptome_bam` alone does not replace the genomic BAM or skip STAR.
 
 For a non-STAR alignment workflow, set `STAR_ENABLED="no"` and provide the BAM in
 `bam`, with `MAPPING_ENABLED="no"` and `KRAKEN_ENABLED="no"`. The `star_log`
@@ -508,7 +512,7 @@ junction-table summary. Do not supply a non-STAR BAM in `transcriptome_bam`:
 the transcriptome insert-size method is explicitly a STAR transcriptome-BAM
 method, so use the genomic insert-size method instead.
 
-With STAR and FastQC both disabled, FASTQs are not required. HTSeq can remain
+For samples reusing a BAM, FASTQs are only required when FastQC is enabled. HTSeq can remain
 enabled on an externally generated BAM, independently of the aligner. Set
 `HTSEQ_ENABLED="no"` to use another quantifier; importing external count
 matrices into the transfer bundle is not part of this workflow.

@@ -82,13 +82,13 @@ try:
             seen.add(sample)
             if target != "ALL" and sample != target:
                 continue
-            if star_enabled == "yes":
+            value = (row.get("bam") or "").strip()
+            if value not in ("", "NA", "."):
+                bam = (sheet.parent / value).resolve()
+            elif star_enabled == "yes":
                 bam = Path(star_outdir).resolve() / sample / f"{sample}.Aligned.sortedByCoord.out.bam"
             else:
-                value = (row.get("bam") or "").strip()
-                if value in ("", "NA", "."):
-                    raise ValueError(f"bam is required for {sample}")
-                bam = (sheet.parent / value).resolve()
+                raise ValueError(f"bam is required for {sample}")
             selected.append([sample, str(bam)])
     if not selected:
         raise ValueError(f"No samples found for {target!r}")

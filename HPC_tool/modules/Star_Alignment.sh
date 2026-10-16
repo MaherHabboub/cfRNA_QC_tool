@@ -27,6 +27,64 @@ case "${STAR_ENABLED:-yes}" in
 esac
 : "${SAMPLESHEET:?ERROR: SAMPLESHEET not set}"
 : "${OUTDIR:?ERROR: OUTDIR not set}"
+
+# -----------------------------
+# Read samples
+# -----------------------------
+# Header-based reading also supports standalone calls with FASTQ-only sheets.
+# Capture first so a parser failure cannot be hidden by process substitution.
+ROWS="$(python3 - "${STAR_INPUT_SAMPLESHEET:-$SAMPLESHEET}" "$TARGET_SAMPLE" <<'PY'
+import csv
+import os
+from pathlib import Path
+import re
+import sys
+
+sheet = Path(sys.argv[1]).resolve()
+target = sys.argv[2]
+selected, seen = [], set()
+matched = False
+try:
+    with sheet.open(newline="", encoding="utf-8-sig") as handle:
+        for row in csv.DictReader(handle, delimiter="\t"):
+            if not any(row.values()):
+                continue
+            sample = (row.get("sample_id") or "").strip()
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", sample) or sample == "ALL" or sample in seen:
+                raise ValueError(f"Invalid or duplicate sample_id: {sample!r}")
+            seen.add(sample)
+            if target != "ALL" and sample != target:
+                continue
+            matched = True
+            bam = (row.get("bam") or "").strip()
+            if bam not in ("", "NA", "."):
+                bam_path = (sheet.parent / bam).resolve()
+                if not bam_path.is_file() or not os.access(bam_path, os.R_OK):
+                    raise ValueError(f"bam for {sample} not found or unreadable: {bam_path}")
+                print(f"Skipping STAR for {sample}: using supplied BAM {bam_path}", file=sys.stderr)
+                continue
+            layout = (row.get("layout") or "").strip()
+            condition = (row.get("condition") or "").strip()
+            if layout not in ("PE", "SE") or condition in ("", "NA", "."):
+                raise ValueError(f"Valid layout and condition are required for {sample}")
+            reads = []
+            for key in ("fastq_r1", "fastq_r2"):
+                value = (row.get(key) or "").strip()
+                reads.append("NA" if value in ("", "NA", ".") else str((sheet.parent / value).resolve()))
+            selected.append([sample, *reads, layout, condition])
+    if not seen or (not matched and target != "ALL"):
+        raise ValueError(f"No samples found for {target!r}")
+    csv.writer(sys.stdout, delimiter="\t", lineterminator="\n").writerows(selected)
+except (OSError, ValueError) as error:
+    sys.exit(f"ERROR: {error}")
+PY
+)"
+
+if [[ -z "$ROWS" ]]; then
+    echo "No samples require STAR alignment."
+    exit 0
+fi
+
 : "${STAR_INDEX:?ERROR: STAR_INDEX not set}"
 : "${GTF:?ERROR: GTF not set}"
 STAR_THREADS="${SLURM_CPUS_PER_TASK:-8}"
@@ -46,48 +104,6 @@ module load env/software/doduo
 module load STAR/2.7.11b-GCC-13.2.0
 
 command -v STAR >/dev/null || { echo "ERROR: STAR is unavailable" >&2; exit 1; }
-
-# -----------------------------
-# Read samples
-# -----------------------------
-# Header-based reading also supports standalone calls with FASTQ-only sheets.
-# Capture first so a parser failure cannot be hidden by process substitution.
-ROWS="$(python3 - "$SAMPLESHEET" "$TARGET_SAMPLE" <<'PY'
-import csv
-from pathlib import Path
-import re
-import sys
-
-sheet = Path(sys.argv[1]).resolve()
-target = sys.argv[2]
-selected, seen = [], set()
-try:
-    with sheet.open(newline="", encoding="utf-8-sig") as handle:
-        for row in csv.DictReader(handle, delimiter="\t"):
-            if not any(row.values()):
-                continue
-            sample = (row.get("sample_id") or "").strip()
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", sample) or sample == "ALL" or sample in seen:
-                raise ValueError(f"Invalid or duplicate sample_id: {sample!r}")
-            seen.add(sample)
-            if target != "ALL" and sample != target:
-                continue
-            layout = (row.get("layout") or "").strip()
-            condition = (row.get("condition") or "").strip()
-            if layout not in ("PE", "SE") or condition in ("", "NA", "."):
-                raise ValueError(f"Valid layout and condition are required for {sample}")
-            reads = []
-            for key in ("fastq_r1", "fastq_r2"):
-                value = (row.get(key) or "").strip()
-                reads.append("NA" if value in ("", "NA", ".") else str((sheet.parent / value).resolve()))
-            selected.append([sample, *reads, layout, condition])
-    if not selected:
-        raise ValueError(f"No samples found for {target!r}")
-    csv.writer(sys.stdout, delimiter="\t", lineterminator="\n").writerows(selected)
-except (OSError, ValueError) as error:
-    sys.exit(f"ERROR: {error}")
-PY
-)"
 
 # -----------------------------
 # Process samples

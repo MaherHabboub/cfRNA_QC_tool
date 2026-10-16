@@ -172,11 +172,12 @@ done
 RUN_DIR="$(mktemp -d "${OUTDIR}/logs/run.XXXXXXXX")"
 HPC_RUN_ID="${RUN_DIR##*/}"
 RESOLVED_SAMPLESHEET="${RUN_DIR}/samplesheet.tsv"
+STAR_INPUT_SAMPLESHEET="${RUN_DIR}/star_inputs.tsv"
 (
     export SAMPLESHEET STAR_OUTDIR GTF EXON_BED STAR_INDEX DOWNSAMPLE_ENABLED
     export "${MODULE_SWITCHES[@]}"
     # Keep samplesheet preparation here, like the embedded parsers in modules.
-    python3 - "$RESOLVED_SAMPLESHEET" <<'PY'
+    python3 - "$RESOLVED_SAMPLESHEET" "$STAR_INPUT_SAMPLESHEET" <<'PY'
 import csv
 import os
 from pathlib import Path
@@ -197,6 +198,10 @@ def enabled(name):
 def require_file(value, label):
     if value == "NA" or not Path(value).is_file() or not os.access(value, os.R_OK):
         raise ValueError(f"{label} not found or unreadable: {value}")
+
+
+def needs_star(row):
+    return enabled("STAR_ENABLED") and row["bam"] == "NA"
 
 
 def read_samples():
@@ -231,15 +236,21 @@ def read_samples():
                 value = row[key]
                 # Relative sample paths are relative to the input samplesheet.
                 row[key] = "NA" if value in ("", "NA", ".") else str((sheet.parent / value).resolve())
-            if enabled("STAR_ENABLED"):
-                prefix = Path(os.environ["STAR_OUTDIR"]).resolve() / sample / f"{sample}."
-                row["bam"] = f"{prefix}Aligned.sortedByCoord.out.bam"
-                row["star_log"] = f"{prefix}Log.final.out"
-                row["sj_tab"] = f"{prefix}SJ.out.tab"
             samples.append(row)
     if not samples:
         raise ValueError("Samplesheet contains no samples")
     return samples
+
+
+def resolve_alignment(row):
+    row = row.copy()
+    if needs_star(row):
+        sample = row["sample_id"]
+        prefix = Path(os.environ["STAR_OUTDIR"]).resolve() / sample / f"{sample}."
+        row["bam"] = f"{prefix}Aligned.sortedByCoord.out.bam"
+        row["star_log"] = f"{prefix}Log.final.out"
+        row["sj_tab"] = f"{prefix}SJ.out.tab"
+    return row
 
 
 def validate_inputs(samples):
@@ -247,7 +258,7 @@ def validate_inputs(samples):
     require_file(os.environ.get("GTF", "NA"), "GTF")
     if enabled("STRANDEDNESS_ENABLED"):
         require_file(os.environ.get("EXON_BED", "NA"), "EXON_BED")
-    if enabled("STAR_ENABLED"):
+    if any(needs_star(row) for row in samples):
         index = os.environ.get("STAR_INDEX", "")
         if not index or not Path(index).is_dir():
             raise ValueError(f"STAR_INDEX directory not found: {index}")
@@ -258,16 +269,16 @@ def validate_inputs(samples):
     ))
     for row in samples:
         sample = row["sample_id"]
-        if enabled("STAR_ENABLED") or enabled("FASTQC_ENABLED"):
+        if needs_star(row) or enabled("FASTQC_ENABLED"):
             require_file(row["fastq_r1"], f"fastq_r1 for {sample}")
             if row["layout"] == "PE":
                 require_file(row["fastq_r2"], f"fastq_r2 for {sample}")
-                if enabled("STAR_ENABLED") and row["fastq_r1"].endswith(".gz") != row["fastq_r2"].endswith(".gz"):
+                if needs_star(row) and row["fastq_r1"].endswith(".gz") != row["fastq_r2"].endswith(".gz"):
                     raise ValueError(f"STAR mates must use the same compression for {sample}")
         if row["transcriptome_bam"] != "NA":
             require_file(row["transcriptome_bam"], f"transcriptome_bam for {sample}")
-        if not enabled("STAR_ENABLED"):
-            if bam_needed:
+        if not needs_star(row):
+            if bam_needed or row["bam"] != "NA":
                 require_file(row["bam"], f"bam for {sample}")
             if enabled("MAPPING_ENABLED") or enabled("KRAKEN_ENABLED"):
                 require_file(row["star_log"], f"star_log for {sample} (disable mapping/Kraken for non-STAR BAMs)")
@@ -288,6 +299,11 @@ try:
     with open(sys.argv[1], "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=COLUMNS, delimiter="\t", lineterminator="\n")
         writer.writeheader()
+        writer.writerows(resolve_alignment(row) for row in samples)
+    # Preserve supplied-vs-generated BAM provenance for STAR and manual reruns.
+    with open(sys.argv[2], "w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=COLUMNS, delimiter="\t", lineterminator="\n")
+        writer.writeheader()
         writer.writerows(samples)
 except (OSError, ValueError, KeyError) as error:
     sys.exit(f"ERROR: {error}")
@@ -299,7 +315,7 @@ CONFIG="${RUN_DIR}/config.sh"
 cat "$ORIGINAL_CONFIG" > "$CONFIG"
 printf '\n# Resolved inputs for this submission.\n' >> "$CONFIG"
 SAMPLESHEET="$RESOLVED_SAMPLESHEET"
-for value_name in SAMPLESHEET OUTDIR STAR_OUTDIR HTSEQ_OUTDIR GTF EXON_BED STAR_INDEX HPC_RUN_ID \
+for value_name in SAMPLESHEET STAR_INPUT_SAMPLESHEET OUTDIR STAR_OUTDIR HTSEQ_OUTDIR GTF EXON_BED STAR_INDEX HPC_RUN_ID \
     HTSEQ_STRANDED DOWNSAMPLE_ENABLED "${MODULE_SWITCHES[@]}"; do
     printf '%s=%q\n' "$value_name" "${!value_name:-}" >> "$CONFIG"
 done
@@ -426,10 +442,14 @@ do
     star_job=""
     downsample_job=""
 
-    if [[ "$STAR_ENABLED" == "yes" ]]; then
+    # The STAR input sheet retains missing BAMs; the QC sheet has output paths.
+    if [[ "$STAR_ENABLED" == "yes" ]] && awk -F '\t' -v sample="$SAMPLE" \
+        'NR > 1 && $1 == sample && $4 == "NA" {found=1} END {exit !found}' "$STAR_INPUT_SAMPLESHEET"; then
         star_job=$(submit_step "00a" "star_${SAMPLE}" "Star_Alignment.sh" \
             "$STAR_TIME" "$STAR_MEM" "$STAR_THREADS" "" "" "$SAMPLE")
         qc_jobs+=("$star_job")
+    elif [[ "$STAR_ENABLED" == "yes" ]]; then
+        echo "Skipping STAR for $SAMPLE: using supplied BAM $BAM"
     fi
 
     if [[ "$FASTQC_ENABLED" == "yes" ]]; then
