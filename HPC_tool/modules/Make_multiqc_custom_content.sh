@@ -83,6 +83,8 @@ import math
 import csv
 import json
 import base64
+import io
+import xml.etree.ElementTree as ET
 from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
@@ -265,8 +267,9 @@ def write_splice_cohort(df):
     summary_file = result_dir / "splice_read_fraction_cohort_summary.tsv"
     png_file = result_dir / "splice_read_fractions.png"
     pdf_file = result_dir / "splice_read_fractions.pdf"
+    html_file = result_dir / "splice_read_fractions.html"
     # Never display a plot or table from an earlier run after current failures.
-    for path in (table, summary_file, png_file, pdf_file):
+    for path in (table, summary_file, png_file, pdf_file, html_file):
         path.unlink(missing_ok=True)
     if df.empty:
         print("WARNING: No current splice results; omitting cohort summaries.")
@@ -327,9 +330,9 @@ def write_splice_cohort(df):
         box.set_facecolor(color)
         box.set_alpha(0.55)
 
-    for x, values, color in zip(x_positions, groups, colors):
+    for group_index, (x, values, color) in enumerate(zip(x_positions, groups, colors)):
         jitter = rng.uniform(-0.075, 0.075, size=len(values))
-        ax.scatter(
+        points = ax.scatter(
             np.full(len(values), x) + jitter,
             values,
             s=34,
@@ -339,6 +342,7 @@ def write_splice_cohort(df):
             linewidths=0.4,
             zorder=3,
         )
+        points.set_gid(f"splice-hover-points-{group_index}")
 
     label_heights = [min(107.5, values.max() + 5.5) for values in groups]
     for x, mean, label_y in zip(x_positions, means, label_heights):
@@ -366,6 +370,56 @@ def write_splice_cohort(df):
     fig.tight_layout()
     fig.savefig(png_file, dpi=300, bbox_inches="tight", facecolor="white")
     fig.savefig(pdf_file, bbox_inches="tight", facecolor="white")
+    # Keep the exact plotted geometry and add browser-native SVG tooltips.
+    # Inline SVG works offline inside MultiQC without additional dependencies.
+    svg_buffer = io.StringIO()
+    fig.savefig(svg_buffer, format="svg", bbox_inches="tight", facecolor="white")
+    svg_ns = "http://www.w3.org/2000/svg"
+    ET.register_namespace("", svg_ns)
+    ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
+    svg = ET.fromstring(svg_buffer.getvalue())
+    for group_index, condition in enumerate(conditions):
+        group = svg.find(f".//*[@id='splice-hover-points-{group_index}']")
+        sample_rows = df.loc[df["condition"] == condition].to_dict("records")
+        markers = group.findall(f".//{{{svg_ns}}}use") if group is not None else []
+        if len(markers) != len(sample_rows):
+            raise ValueError("Splice tooltip markers do not match the plotted samples")
+        for marker, row in zip(markers, sample_rows):
+            total, spliced = int(row["total_unique_mapped_reads"]), int(row["spliced_reads"])
+            tip = (f'Sample: {row["sample"]}\nCondition: {condition}\n'
+                   f'Spliced alignments: {100 * float(row["fraction_spliced"]):.2f}%\n'
+                   f'Spliced count: {spliced / 1e6:.3f} million ({spliced:,})\n'
+                   f'Qualifying mapped count: {total / 1e6:.3f} million ({total:,})\n'
+                   f'Minimum MAPQ: {row["mapq_min"]}')
+            parent = next(element for element in group.iter() if marker in list(element))
+            point = ET.Element(f"{{{svg_ns}}}g", {"class": "splice-hover-point",
+                               "tabindex": "0", "role": "img", "aria-label": tip})
+            ET.SubElement(point, f"{{{svg_ns}}}title").text = tip
+            parent.insert(list(parent).index(marker), point)
+            parent.remove(marker)
+            point.append(marker)
+    # Prefix internal IDs so this SVG cannot collide with other report figures.
+    for element in svg.iter():
+        if "id" in element.attrib:
+            element.set("id", "splice-interactive-" + element.get("id"))
+        for key, value in list(element.attrib.items()):
+            if key.endswith("}href") and value.startswith("#"):
+                element.set(key, "#splice-interactive-" + value[1:])
+            elif "url(#" in value:
+                element.set(key, value.replace("url(#", "url(#splice-interactive-"))
+    markup = ('<div class="splice-interactive-plot">'
+              '<p>Hover over a sample dot for counts and percentages.</p>'
+              '<style>.splice-interactive-plot svg{max-width:100%;height:auto}'
+              '.splice-hover-point{cursor:help}'
+              '.splice-hover-point:hover use,.splice-hover-point:focus use{stroke-width:2px!important}'
+              '</style>' + ET.tostring(svg, encoding="unicode") + '</div>')
+    html_file.write_text('<!DOCTYPE html><html><head><meta charset="utf-8">'
+                         '<title>Spliced read percentages</title></head><body>'
+                         + markup + '</body></html>', encoding="utf-8")
+    Path(custom_dir, "splice_read_fractions_mqc.html").write_text(
+        '<!--\nid: splice_read_fractions\nsection_anchor: splice_read_fractions\n'
+        'section_name: "Spliced read percentages by condition"\n-->\n' + markup,
+        encoding="utf-8")
     plt.close(fig)
 
 # -----------------------------
@@ -402,13 +456,8 @@ df_to_mqc_yaml(
     "Percentage of primary, mapped, non-duplicate, QC-passing alignments with MAPQ at least 30 that cross one or more splice junctions. Counts are in millions."
 )
 
-splice_plot = os.path.join(outdir, "splice_junctions", "splice_read_fractions.png")
-if splice_junction_enabled and os.path.isfile(splice_plot):
-    multiqc_splice_plot = os.path.join(custom_dir, "splice_read_fractions_mqc.png")
-    shutil.copy2(splice_plot, multiqc_splice_plot)
-    print(f"Wrote: {multiqc_splice_plot}")
-else:
-    print("No splice read-fraction plot found; skipping MultiQC image.")
+# write_splice_cohort stages the interactive HTML only. PNG/PDF exports remain
+# under splice_junctions, avoiding a duplicate static plot in MultiQC.
 
 fastqc = read_tsvs(os.path.join(outdir, "fastqc", "**", "*.fastqc_parsed_metrics.tsv")) if fastqc_enabled else pd.DataFrame()
 df_to_mqc_yaml(
@@ -626,6 +675,12 @@ if kraken_enabled:
     kraken_results = os.path.join(outdir, "kraken", "results")
     kraken_visualizations = os.path.join(outdir, "kraken", "visualizations")
     os.makedirs(kraken_visualizations, exist_ok=True)
+    # Refresh only generated figures/manifests, including obsolete extra batches.
+    for pattern in ("kraken_visualization_overview*.png", "01_total_library_composition*.png",
+                    "02_star_unmapped_composition*.png", "03_top_genera_dotplot*.png",
+                    "04_taxon_evidence*.png", "kraken_plot_batches.tsv", "visualization_manifest.tsv"):
+        for previous in Path(kraken_visualizations).glob(pattern):
+            previous.unlink()
 
     try:
         sample_metadata = pd.read_csv(samplesheet_path, sep="\t", dtype=str)
@@ -747,7 +802,7 @@ if kraken_enabled:
                 ax.set_ylim(0, 100)
                 ax.set_ylabel("Percentage (%)")
                 ax.set_xticks(np.arange(len(frame)))
-                ax.set_xticklabels(sample_order, rotation=25, ha="right")
+                ax.set_xticklabels(frame.index.tolist(), rotation=25, ha="right")
                 ax.grid(axis="y", alpha=0.3)
                 ax.set_axisbelow(True)
                 ax.legend(frameon=False, fontsize=7, ncol=2, loc="upper left", bbox_to_anchor=(1.01, 1.0))
@@ -794,7 +849,7 @@ if kraken_enabled:
             def draw_evidence(ax, title):
                 for domain, color in domain_colors.items():
                     for rank, marker in [("G", "o"), ("S", "^")]:
-                        part = evidence.loc[(evidence["microbial_domain"] == domain) & (evidence["rank"] == rank)]
+                        part = evidence.loc[evidence["sample"].isin(sample_order) & (evidence["microbial_domain"] == domain) & (evidence["rank"] == rank)]
                         ax.scatter(np.log10(part["clade_fragments"] + 1), np.log10(part["distinct_minimizers"] + 1), color=color, marker=marker, s=32, alpha=0.7, edgecolor="#222222", linewidth=0.3)
                 ax.set_title(title, fontweight="bold")
                 ax.set_xlabel("log10(clade fragments + 1)")
@@ -802,60 +857,77 @@ if kraken_enabled:
                 ax.grid(alpha=0.3)
                 ax.legend(handles=[Patch(facecolor=color, label=domain) for domain, color in domain_colors.items()] + [Line2D([], [], marker="o", linestyle="None", color="#555555", label="Genus"), Line2D([], [], marker="^", linestyle="None", color="#555555", label="Species")], frameon=False, fontsize=7)
 
+            # Keep cohort-wide genus selection/scales so panels remain comparable.
+            # Every rendered panel is restricted to the current batch samples.
+            all_sample_order = list(sample_order)
+            batches = [all_sample_order[i:i + 20] for i in range(0, len(all_sample_order), 20)]
+            overview_html = Path(custom_dir, "kraken_visualization_overview_mqc.html")
+            overview_html.write_text(
+                '<!--\nid: kraken_visualization_overview\n'
+                'section_anchor: kraken_visualization_overview\n'
+                'parent_id: custom_kraken\n'
+                'parent_name: "Kraken2 Microbial Screening"\n'
+                'section_name: "Kraken2 overviews (up to 20 samples each)"\n-->\n',
+                encoding="utf-8")
+            manifest_rows = [
+                ("kraken_summary.tsv", "Combined sample-level Kraken QC metrics"),
+                ("kraken_taxa_long.tsv", "Combined long-format taxonomic table"),
+                ("kraken_top_genera_fpm_matrix.tsv", "Cohort-wide top-genus fragments-per-million matrix"),
+                ("kraken_plot_batches.tsv", "Samples included in each overview batch"),
+            ]
+
             def save_kraken_figure(fig, stem):
-                output = os.path.join(kraken_visualizations, stem + ".png")
+                output = Path(kraken_visualizations, stem + ".png")
                 fig.savefig(output, dpi=300, bbox_inches="tight")
                 plt.close(fig)
-                # Only the combined overview belongs in the report. Individual
-                # panels remain available as standalone source figures.
-                if stem == "kraken_visualization_overview":
-                    # HTML custom content supports shared parents in MultiQC
-                    # 1.28; raw image sections are otherwise separate modules.
-                    encoded = base64.b64encode(Path(output).read_bytes()).decode("ascii")
-                    with open(os.path.join(custom_dir, stem + "_mqc.html"), "w") as handle:
-                        handle.write('<!--\nid: kraken_visualization_overview\n'
-                                     'section_anchor: kraken_visualization_overview\n'
-                                     'parent_id: custom_kraken\n'
-                                     'parent_name: "Kraken2 Microbial Screening"\n'
-                                     'section_name: "Kraken2 overview"\n-->\n')
-                        handle.write('<img alt="Kraken2 four-panel overview" '
+                manifest_rows.append((output.name, batch_label + ": " + stem))
+                if stem.startswith("kraken_visualization_overview"):
+                    encoded = base64.b64encode(output.read_bytes()).decode("ascii")
+                    with overview_html.open("a", encoding="utf-8") as handle:
+                        handle.write(f'<h4>{batch_label}</h4>\n')
+                        handle.write('<img alt="Kraken2 four-panel overview: ' + batch_label + '" '
                                      'style="max-width:100%;height:auto" '
                                      f'src="data:image/png;base64,{encoded}">\n')
 
-            fig, axes = plt.subplots(2, 2, figsize=(19, 14), constrained_layout=True)
-            draw_stacked(axes[0, 0], full_percentages, "A. Complete-library composition")
-            draw_stacked(axes[0, 1], unmapped_percentages, "B. STAR-unmapped composition")
-            draw_top_genera(axes[1, 0], "C. Top microbial genera")
-            draw_evidence(axes[1, 1], "D. Fragment and minimizer evidence")
-            fig.suptitle("Kraken2 screening of STAR-unmapped reads", fontsize=16, fontweight="bold")
-            save_kraken_figure(fig, "kraken_visualization_overview")
+            batch_rows = []
+            for batch_index, sample_order in enumerate(batches, start=1):
+                first = (batch_index - 1) * 20 + 1
+                last = first + len(sample_order) - 1
+                batch_label = f"Batch {batch_index} of {len(batches)} — samples {first}–{last}"
+                suffix = "" if len(batches) == 1 else f"_batch_{batch_index:03d}"
+                batch_rows.extend((batch_index, sample) for sample in sample_order)
+                full_batch = full_percentages.loc[sample_order]
+                unmapped_batch = unmapped_percentages.loc[sample_order]
 
-            fig, ax = plt.subplots(figsize=(max(8.0, 1.35 * len(sample_order) + 4.0), 6.0), constrained_layout=True)
-            draw_stacked(ax, full_percentages, "Complete-library composition")
-            save_kraken_figure(fig, "01_total_library_composition")
-            fig, ax = plt.subplots(figsize=(max(8.0, 1.35 * len(sample_order) + 4.0), 6.0), constrained_layout=True)
-            draw_stacked(ax, unmapped_percentages, "Composition of STAR-unmapped reads")
-            save_kraken_figure(fig, "02_star_unmapped_composition")
-            fig, ax = plt.subplots(figsize=(11.5, max(6.0, 0.42 * max(len(genus_matrix.index), 1) + 2.0)), constrained_layout=True)
-            draw_top_genera(ax, "Top microbial genera")
-            save_kraken_figure(fig, "03_top_genera_dotplot")
-            fig, ax = plt.subplots(figsize=(10.5, 7.0), constrained_layout=True)
-            draw_evidence(ax, "Taxonomic support: fragments versus distinct minimizers")
-            save_kraken_figure(fig, "04_taxon_evidence")
+                fig, axes = plt.subplots(2, 2, figsize=(19, 14), constrained_layout=True)
+                draw_stacked(axes[0, 0], full_batch, "A. Complete-library composition")
+                draw_stacked(axes[0, 1], unmapped_batch, "B. STAR-unmapped composition")
+                draw_top_genera(axes[1, 0], "C. Top microbial genera (cohort selection)")
+                draw_evidence(axes[1, 1], "D. Fragment and minimizer evidence")
+                fig.suptitle("Kraken2 screening of STAR-unmapped reads\n" + batch_label, fontsize=16, fontweight="bold")
+                save_kraken_figure(fig, "kraken_visualization_overview" + suffix)
 
+                fig, ax = plt.subplots(figsize=(max(8.0, 1.35 * len(sample_order) + 4.0), 6.0), constrained_layout=True)
+                draw_stacked(ax, full_batch, "Complete-library composition")
+                save_kraken_figure(fig, "01_total_library_composition" + suffix)
+                fig, ax = plt.subplots(figsize=(max(8.0, 1.35 * len(sample_order) + 4.0), 6.0), constrained_layout=True)
+                draw_stacked(ax, unmapped_batch, "Composition of STAR-unmapped reads")
+                save_kraken_figure(fig, "02_star_unmapped_composition" + suffix)
+                fig, ax = plt.subplots(figsize=(11.5, max(6.0, 0.42 * max(len(genus_matrix.index), 1) + 2.0)), constrained_layout=True)
+                draw_top_genera(ax, "Top microbial genera (cohort selection)")
+                save_kraken_figure(fig, "03_top_genera_dotplot" + suffix)
+                fig, ax = plt.subplots(figsize=(10.5, 7.0), constrained_layout=True)
+                draw_evidence(ax, "Taxonomic support: fragments versus distinct minimizers")
+                save_kraken_figure(fig, "04_taxon_evidence" + suffix)
+
+            with open(os.path.join(kraken_visualizations, "kraken_plot_batches.tsv"), "w", encoding="utf-8", newline="") as handle:
+                writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+                writer.writerow(["batch", "sample"])
+                writer.writerows(batch_rows)
             with open(os.path.join(kraken_visualizations, "visualization_manifest.tsv"), "w", encoding="utf-8", newline="") as handle:
                 writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
                 writer.writerow(["output", "description"])
-                writer.writerows([
-                    ("kraken_summary.tsv", "Combined sample-level Kraken QC metrics"),
-                    ("kraken_taxa_long.tsv", "Combined long-format taxonomic table"),
-                    ("kraken_top_genera_fpm_matrix.tsv", "Top-genus fragments-per-million matrix"),
-                    ("01_total_library_composition.png", "Complete-library composition"),
-                    ("02_star_unmapped_composition.png", "Composition within STAR-unmapped reads"),
-                    ("03_top_genera_dotplot.png", "Top genera normalized per million total input fragments"),
-                    ("04_taxon_evidence.png", "Clade-fragment versus distinct-minimizer evidence"),
-                    ("kraken_visualization_overview.png", "Four-panel Kraken2 overview"),
-                ])
+                writer.writerows(manifest_rows)
 
             table_columns = ["sample", "condition", "layout", "unmapped_percent_total", "classified_percent_unmapped", "microbial_percent_total", "microbial_percent_unmapped", "top_genus", "top_species"]
             df_to_mqc_yaml(summary[table_columns], os.path.join(custom_dir, "custom_kraken_microbiome_summary_mqc.yaml"), "custom_kraken_microbiome_summary", "Kraken2 Microbial Screen Summary", "Kraken2 classification of STAR-unmapped reads. The overview plot and source tables are staged with this MultiQC report.")

@@ -59,7 +59,7 @@ each shell module's **Software environment** section:
 
 - `Star_Alignment.sh` loads `env/software/doduo` and `STAR/2.7.11b-GCC-13.2.0`.
 - `HTSeq_Counts.sh` loads `env/software/doduo`, `HTSeq/2.0.7-foss-2023a`, and
-  `SAMtools/1.19.2-GCC-13.2.0`.
+  `SAMtools/1.18-GCC-12.3.0` to match HTSeq's `foss/2023a` toolchain.
 
 To adapt to another cluster, edit those sections to match its available
 software modules. The Conda file documents the required software stack;
@@ -395,7 +395,7 @@ Settings are organized by purpose:
 selecting the cluster on the submission host; they do not select STAR/HTSeq
 software versions inside jobs.
 
-STAR defaults to 8 CPUs/60G/36 hours and HTSeq to 1 CPU/60G/36 hours. FastQC
+STAR defaults to 8 CPUs/40G/12 hours and HTSeq to 1 CPU/16G/12 hours. FastQC
 and downsampling thread allocations also live in the submitter. These modules read
 `SLURM_CPUS_PER_TASK`, keeping tool threads consistent with the allocated CPUs;
 HTSeq uses this for temporary sorting and retains single-process counting.
@@ -436,6 +436,27 @@ database. `KRAKEN_TOP_TAXA` controls the number of per-sample genus/species rows
 retained, while `KRAKEN_TOP_GENERA` controls the cohort visualisation. For `PE`
 samples, STAR must have produced both `Unmapped.out.mate1` and
 `Unmapped.out.mate2` in the directory containing that sample's `star_log`.
+
+Custom MultiQC tables use readable column titles, percentages to two decimal
+places, read/support counts in millions and junction counts in thousands (three
+decimal places), and normalized drop-off values/ratios to four decimal places.
+FastQC R1 and R2 rows remain separate. Kraken's summary table and one combined
+four-panel overviews appear together, with at most 20 samples per overview in
+samplesheet order. All batches stay in the same Kraken section; the summary
+table covers the full cohort and top genera are selected across the cohort for
+consistent comparison. Individual panels are also batched and remain in the source
+visualization directory. Raw analysis TSVs retain their original units and precision.
+The splice plot supports offline hover tooltips on individual sample dots,
+showing sample, condition, spliced percentage, alignment counts, and MAPQ threshold.
+Static PNG/PDF exports and a standalone interactive HTML are retained under
+`splice_junctions/`; MultiQC displays only the interactive plot. No additional
+plotting package is required.
+
+To regenerate a completed run's report after updating reporting modules, resubmit
+the `multiqc` wrapper recorded in `OUTDIR/logs/submitted_jobs.tsv`. This reuses the
+run's resolved config and completion markers. Resubmit the recorded `aggregate`
+wrapper afterward to refresh the transfer bundle. Do not resubmit the full pipeline
+or use the original config for this reporting-only rerun.
 
 #### Building a Kraken2 database
 
@@ -638,6 +659,10 @@ config exposes `BIOTYPE_ENABLED`, `PCA_SSGSEA_ENABLED`, and
 `PCA_SSGSEA_ENABLED=FALSE` skips both PCA and ssGSEA. HPC metric correlation
 runs only when `HPC_SUMMARY` is non-empty and PCA is enabled. The generated HTML
 report omits sections for disabled modules.
+
+The HTML report shows interactive library-size, normalization-density, PCA,
+and sex-chromosome plots with sample names on hover. The analysis scripts also
+save PNG versions and compact plotting tables under `OUT_ROOT`.
 
 ### Launch from a Terminal
 
