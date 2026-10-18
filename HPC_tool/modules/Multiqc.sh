@@ -142,19 +142,36 @@ cat > "$MULTIQC_CONFIG" <<EOF
 title: "HPC RNA-seq QC Report"
 subtitle: "Standard tool outputs plus custom QC metrics"
 ignore_images: false
+# Explicit subsection IDs and ordering keep each summary above its plot.
+report_section_order:
+  insert_size_distribution_histograms:
+    after: custom_insert_size_distribution_summary
+  exon_intron_dropoff_profiles:
+    after: custom_exon_intron_dropoff_summary
+  splice_read_fractions:
+    after: custom_splice_read_fractions
+  kraken_visualization_overview:
+    after: custom_kraken_microbiome_summary
 custom_content:
   order:
     - custom_fastqc_parsed_metrics
     - custom_mapping_summary
     - custom_splice_junction_summary
+    - custom_spliced_reads
     - custom_splice_read_fractions
     - splice_read_fractions
+    - custom_insert_size
     - custom_insert_size_distribution_summary
+    - insert_size_distribution_histograms
+    - custom_exon_intron_dropoff
     - custom_exon_intron_dropoff_summary
+    - exon_intron_dropoff_profiles
     - custom_kraken
     - custom_kraken_microbiome_summary
     - kraken_visualization_overview
 EOF
+# Keep standard-module interpretation separate from generated custom content.
+cat "${MODULE_DIR}/../config/multiqc_section_comments.yaml" >> "$MULTIQC_CONFIG"
 
 echo "Created MultiQC config:"
 echo "$MULTIQC_CONFIG"

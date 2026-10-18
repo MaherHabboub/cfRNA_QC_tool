@@ -154,6 +154,22 @@ esac''')
         self.assertIn('fastq_r1 for existing', result.stderr)
         self.assertFalse((self.root / 'calls').exists())
 
+    def test_non_star_bam_needs_no_star_outputs_for_applicable_modules(self):
+        self.write_inputs([self.existing(star_log='NA', sj_tab='NA')],
+                          STAR_INDEX='', MAPPING_ENABLED='no', KRAKEN_ENABLED='no')
+        run, samples, jobs = self.submit()
+        self.assertFalse(any(name.startswith('star_') for name in jobs))
+        for module in ('htseq', 'downsample', 'duplication', 'genebody',
+                       'read_distribution', 'splice_junction', 'strandedness', 'dropoff'):
+            self.assertIn(f'{module}_existing', jobs)
+        insert_job = jobs['insert_size_distribution_existing']
+        self.assertIn('Insert_Size_Distribution_Genomic.sh',
+                      Path(insert_job['wrapper_script']).read_text())
+        self.assertEqual(samples['existing']['star_log'], 'NA')
+        self.assertEqual(samples['existing']['sj_tab'], 'NA')
+        self.run_script('modules/HTSeq_Counts.sh', run / 'config.sh', 'existing')
+        self.assertIn(str(self.root / 'provided.bam'), (self.root / 'calls').read_text())
+
     def test_disabled_star_keeps_existing_bam(self):
         self.write_inputs([self.existing()], STAR_ENABLED='no', STAR_INDEX='')
         _, samples, jobs = self.submit()

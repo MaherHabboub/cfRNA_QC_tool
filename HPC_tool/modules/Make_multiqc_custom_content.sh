@@ -196,6 +196,86 @@ def table_column(col):
     return labels.get(col, title), factor, fmt
 
 
+# Concise interpretation shared by each table and its associated plot.
+QC_GUIDANCE = {
+    "custom_mapping_summary": (
+        'This table summarizes how STAR aligned reads to the human reference. It separates unique '
+        'mappings, multiple mappings, and unmapped reads. Good libraries have high overall and unique '
+        'mapping, with few reads mapping to multiple or too many loci. Low alignment or excessive '
+        'ambiguous mappings can indicate contamination, repetitive RNA, short reads, or poor sequence '
+        'quality.'
+    ),
+    "custom_splice_junction_summary": (
+        'This table summarizes annotated and novel splice junctions detected by STAR, with supporting '
+        'alignment counts. Junction fractions describe distinct junctions, while support counts '
+        'describe the evidence for them. Good libraries generally have predominantly annotated '
+        'junctions and strong unique-read support relative to sequencing depth. Many weakly supported '
+        'novel junctions warrant checking alignment quality and annotation completeness.'
+    ),
+    "custom_splice_read_fractions": (
+        'This section shows the percentage of qualifying mapped alignments that cross at least one '
+        'splice junction. It uses primary, non-duplicate, QC-passing alignments meeting the '
+        'configured MAPQ threshold, normally 30. A substantial spliced fraction supports mature RNA, '
+        'with expectations depending on read length and library design. Very low splicing, especially '
+        'below 5%, can flag DNA contamination but also short fragments or unspliced RNA.'
+    ),
+    "custom_fastqc_parsed_metrics": (
+        'This table summarizes read-end quality, the lowest positional mean quality, GC peak, and '
+        'adapter content from FastQC. GC reflects the sequenced RNA mixture and library preparation, '
+        'so 41% is not a reliable RNA/DNA cutoff. Good reads retain high Phred quality, ideally near '
+        'Q40 where supported by the platform, with little residual adapter and an expected GC '
+        'profile. Low quality, excess adapters, or unexpected GC peaks warrant investigation.'
+    ),
+    "custom_insert_size_distribution_summary": (
+        'This section summarizes paired-end insert sizes using the selected genomic or transcriptomic '
+        'alignment method. Genomic spans can include introns, whereas transcriptomic sizes better '
+        'approximate spliced RNA fragment lengths. Good libraries have a distribution consistent with '
+        'the RNA protocol and comparable samples. An unexplained dominant peak near 167 bp can '
+        'suggest nucleosome-protected cfDNA, especially in genomic estimates, but does not establish '
+        'DNA contamination alone.'
+    ),
+    "custom_exon_intron_dropoff_summary": (
+        'This section averages read-overlap counts in bins around exon-intron boundaries and '
+        'normalizes them to mean exon-side counts. Negative positions are exonic and positive '
+        'positions are intronic. Mature RNA should show a sharp decline into introns and a low '
+        'intron/exon ratio. A weak decline or high intronic signal can suggest DNA contamination or '
+        'unspliced RNA.'
+    ),
+    "custom_kraken_microbiome_summary": (
+        'Kraken2 classifies STAR-unmapped reads to identify residual human sequences and possible '
+        'non-human sources. The overview compares their abundance within both the full library and '
+        'the unmapped subset. Good human RNA libraries generally have few unmapped reads and little '
+        'microbial signal, with residual human assignments helping explain some unmapped reads. Many '
+        'unmapped reads with substantial microbial assignments can indicate contamination and should '
+        'be checked against controls and taxonomic support.'
+    ),
+}
+CONTENT_GROUPS = {
+    "custom_insert_size_distribution_summary": ('custom_insert_size', 'Insert Size Distribution'),
+    "custom_exon_intron_dropoff_summary": ('custom_exon_intron_dropoff', 'Exon-Intron Drop-off'),
+    "custom_splice_read_fractions": ('custom_spliced_reads', 'Spliced Read Percentages'),
+    "custom_kraken_microbiome_summary": ('custom_kraken', 'Kraken2 Microbial Screening'),
+}
+
+def content_metadata(section_id):
+    metadata = {}
+    if section_id in CONTENT_GROUPS:
+        metadata["parent_id"], metadata["parent_name"] = CONTENT_GROUPS[section_id]
+    return metadata
+
+def write_image_content(fig, section_id, name, summary_id):
+    """Embed each figure under the same parent as its summary table."""
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="png", dpi=200)
+    metadata = dict(id=section_id, section_id=section_id, section_anchor=section_id, section_name=name,
+                    description=QC_GUIDANCE[summary_id], **content_metadata(summary_id))
+    header = "\n".join(f"{key}: {json.dumps(value)}" for key, value in metadata.items())
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    Path(custom_dir, section_id + "_mqc.html").write_text(
+        "<!--\n" + header + "\n-->\n"
+        + f'<img alt="{name}" style="max-width:100%;height:auto" src="data:image/png;base64,{encoded}">',
+        encoding="utf-8")
+
 def df_to_mqc_yaml(df, out_yaml, section_id, section_name, description):
     if df.empty:
         print(f"Skipping empty section: {section_name}")
@@ -227,12 +307,13 @@ def df_to_mqc_yaml(df, out_yaml, section_id, section_name, description):
 
     with open(out_yaml, "w") as out:
         out.write(f'id: "{section_id}"\n')
+        out.write(f'section_id: "{section_id}"\n')
         out.write(f'section_anchor: "{section_id}"\n')
         out.write(f'section_name: "{section_name}"\n')
-        out.write(f'description: "{description}"\n')
+        out.write(f'description: {json.dumps(QC_GUIDANCE.get(section_id, description))}\n')
         out.write('plot_type: "table"\n')
-        if section_id == "custom_kraken_microbiome_summary":
-            out.write('parent_id: "custom_kraken"\nparent_name: "Kraken2 Microbial Screening"\n')
+        for key, value in content_metadata(section_id).items():
+            out.write(f"{key}: {json.dumps(value)}\n")
         out.write("headers:\n")
         for col in df.columns:
             if col == "sample":
@@ -417,8 +498,12 @@ def write_splice_cohort(df):
                          '<title>Spliced read percentages</title></head><body>'
                          + markup + '</body></html>', encoding="utf-8")
     Path(custom_dir, "splice_read_fractions_mqc.html").write_text(
-        '<!--\nid: splice_read_fractions\nsection_anchor: splice_read_fractions\n'
-        'section_name: "Spliced read percentages by condition"\n-->\n' + markup,
+        '<!--\nid: splice_read_fractions\nsection_id: splice_read_fractions\nsection_anchor: splice_read_fractions\n'
+        'section_name: "Spliced read percentages by condition"\n'
+        + '\n'.join(f'{key}: {json.dumps(value)}' for key, value in
+                    dict(description=QC_GUIDANCE['custom_splice_read_fractions'],
+                         **content_metadata('custom_splice_read_fractions')).items())
+        + '\n-->\n' + markup,
         encoding="utf-8")
     plt.close(fig)
 
@@ -602,11 +687,11 @@ if drop_files:
     fig.suptitle("Exon-Intron Drop-off Profiles", y=0.995)
     fig.tight_layout()
 
-    out_png = os.path.join(custom_dir, "exon_intron_dropoff_profiles_mqc.png")
-    fig.savefig(out_png, dpi=200)
+    write_image_content(fig, "exon_intron_dropoff_profiles", "Exon-Intron Drop-off Profiles",
+                        "custom_exon_intron_dropoff_summary")
     plt.close(fig)
 
-    print(f"Wrote combined dropoff image: {out_png}")
+    print("Wrote grouped dropoff plot")
 else:
     print("No dropoff profile TSVs found; skipping combined dropoff plot.")
 
@@ -656,11 +741,11 @@ if insert_size_plot_files:
     fig.suptitle("Insert Size Distribution Histograms", y=0.995)
     fig.tight_layout()
 
-    out_png = os.path.join(custom_dir, "insert_size_distribution_histograms_mqc.png")
-    fig.savefig(out_png, dpi=200)
+    write_image_content(fig, "insert_size_distribution_histograms", "Insert Size Distribution Histograms",
+                        "custom_insert_size_distribution_summary")
     plt.close(fig)
 
-    print(f"Wrote combined insert size distribution image: {out_png}")
+    print("Wrote grouped insert size distribution plot")
 else:
     print("No insert size distribution histogram PNGs found; skipping combined insert size distribution plot.")
 
@@ -863,11 +948,12 @@ if kraken_enabled:
             batches = [all_sample_order[i:i + 20] for i in range(0, len(all_sample_order), 20)]
             overview_html = Path(custom_dir, "kraken_visualization_overview_mqc.html")
             overview_html.write_text(
-                '<!--\nid: kraken_visualization_overview\n'
+                '<!--\nid: kraken_visualization_overview\nsection_id: kraken_visualization_overview\n'
                 'section_anchor: kraken_visualization_overview\n'
                 'parent_id: custom_kraken\n'
                 'parent_name: "Kraken2 Microbial Screening"\n'
-                'section_name: "Kraken2 overviews (up to 20 samples each)"\n-->\n',
+                'section_name: "Kraken2 overviews (up to 20 samples each)"\n'
+                + f'description: {json.dumps(QC_GUIDANCE["custom_kraken_microbiome_summary"])}\n-->\n',
                 encoding="utf-8")
             manifest_rows = [
                 ("kraken_summary.tsv", "Combined sample-level Kraken QC metrics"),
