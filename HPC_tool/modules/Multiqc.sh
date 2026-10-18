@@ -138,7 +138,7 @@ fi
 # -----------------------------
 # Create MultiQC config
 # -----------------------------
-cat > "$MULTIQC_CONFIG" <<EOF
+cat > "$MULTIQC_CONFIG" <<'MULTIQC_CONFIG_YAML'
 title: "HPC RNA-seq QC Report"
 subtitle: "Standard tool outputs plus custom QC metrics"
 ignore_images: false
@@ -169,9 +169,105 @@ custom_content:
     - custom_kraken
     - custom_kraken_microbiome_summary
     - kraken_visualization_overview
-EOF
-# Keep standard-module interpretation separate from generated custom content.
-cat "${MODULE_DIR}/../config/multiqc_section_comments.yaml" >> "$MULTIQC_CONFIG"
+
+# Keys are the HTML section anchors used by MultiQC 1.28 and later.
+section_comments:
+  general_stats: >-
+    This is MultiQC's default overview of key metrics from the enabled tools.
+    Use it to compare sequencing yield, alignment, and duplication across samples.
+    Good libraries have read counts matching the expected depth, strong alignment, and duplication appropriate for the RNA input.
+    Very low alignment, unexpectedly low yield, or extreme duplication warrants investigation.
+  rseqc-read_distribution: >-
+    This module shows where aligned reads fall relative to annotated gene features.
+    It separates coding exons, untranslated exons, introns, and intergenic regions.
+    Mature RNA libraries should be enriched in CDS, 5'UTR, and 3'UTR exons, with relatively little intronic or intergenic signal.
+    Excess intronic or intergenic signal can indicate DNA contamination, unspliced RNA, or annotation mismatch.
+  rseqc-gene_body_coverage: >-
+    This module summarizes read coverage along genes scaled from the 5' to the 3' end.
+    It helps reveal positional bias and differences between samples.
+    Good libraries generally have a smooth profile consistent with the protocol and comparable samples.
+    Strong unexplained end bias or uneven coverage can indicate degradation or library-preparation bias, although targeted 3' protocols intentionally show end bias.
+  rseqc-infer_experiment: >-
+    This module infers library strandedness from read orientation relative to annotated transcripts.
+    It reports support for each orientation and the fraction that cannot be assigned.
+    Good results match the experimental design, with one dominant orientation for stranded libraries or roughly equal orientations for unstranded libraries.
+    An unexpected orientation or a large unassigned fraction warrants checking library settings, annotation, and mapping quality.
+  star_summary: >-
+    This table summarizes STAR alignment yield, mapped read lengths, splice events, and alignment errors.
+    Compare these metrics with the intended sequencing depth and library design.
+    Good libraries show high unique alignment, low mismatch and indel rates, and predominantly annotated splice events.
+    Low alignment, unusually short mapped reads, or elevated errors can indicate poor reads, contamination, or a reference mismatch.
+  star_alignments: >-
+    This plot separates unique alignments, multiple alignments, and reasons for failed mapping.
+    It shows which outcomes account for the input reads.
+    Good libraries have a high uniquely mapped fraction and relatively few reads mapping to too many loci or failing alignment.
+    Excess multimapping or unmapped reads can indicate repetitive RNA, short or poor-quality reads, contamination, or a reference mismatch.
+  fastqc_sequence_counts: >-
+    This module compares read counts and estimated unique and duplicate sequences across samples.
+    FastQC sequence uniqueness is distinct from unique genomic mapping.
+    Good libraries meet the planned depth and retain substantial sequence diversity for their RNA input.
+    Very low yield or extreme duplication can indicate limited library complexity, although abundant transcripts naturally generate repeated sequences.
+  fastqc_per_base_sequence_quality: >-
+    This plot shows mean base-call quality across read positions.
+    Phred scores describe confidence in each base call, with higher scores indicating fewer expected errors.
+    Good reads retain high quality across their length, typically Q30 or higher and near Q40 where supported by the platform.
+    Sustained low scores or a steep decline at read ends can impair alignment and may require trimming.
+  fastqc_per_sequence_quality_scores: >-
+    This plot shows the distribution of mean quality scores per read.
+    It reveals whether a subset of reads has consistently poor base calls.
+    Good libraries place almost all reads in the high-quality range, typically Q30 or higher.
+    A large low-quality tail or a separate low-quality peak indicates reads that may need filtering.
+  fastqc_per_base_sequence_content: >-
+    This plot shows the proportions of A, C, G, and T at each read position.
+    RNA library preparation can create expected biases near read starts.
+    Good libraries show a composition profile consistent with the protocol and comparable samples.
+    Strong unexplained bias across much of the read can indicate adapters or a restricted sequence mixture, while RNA-specific start bias alone is often expected.
+  fastqc_per_sequence_gc_content: >-
+    This plot shows the distribution of GC percentages across reads.
+    Human DNA typically peaks near 41% GC, whereas human RNA libraries often peak at higher GC percentages.
+    A higher GC peak consistent with comparable cfRNA libraries supports an RNA-enriched profile.
+    A peak near 41% can raise concern for DNA contamination, but GC is only a supporting indicator because transcript composition and library preparation affect the profile.
+  fastqc_per_base_n_content: >-
+    This plot shows the percentage of undetermined bases, reported as N, at each read position.
+    These bases represent calls the sequencer could not resolve confidently.
+    Good reads have N content close to zero throughout their length.
+    Elevated N content or position-specific spikes indicate base-calling problems and can reduce usable alignments.
+  fastqc_sequence_length_distribution: >-
+    This plot shows the distribution of read lengths in the FASTQ files.
+    Read length is distinct from the paired-end insert size.
+    Good libraries match the sequencing and trimming protocol, with expected variation after adapter removal.
+    Unexpectedly short reads or unexplained length peaks can indicate excessive trimming, adapter read-through, or mixed inputs.
+  fastqc_sequence_duplication_levels: >-
+    This plot shows how often identical read sequences recur.
+    Duplication can reflect PCR amplification as well as naturally abundant RNA transcripts.
+    Good libraries retain adequate sequence diversity for the input amount and protocol.
+    Extreme duplication with few distinct sequences can indicate low complexity or overamplification, but FastQC duplication alone cannot distinguish PCR copies from biological repeats.
+  fastqc_overrepresented_sequences: >-
+    This section summarizes unusually frequent sequences in each sample.
+    These sequences can originate from adapters, rRNA, abundant transcripts, or other contaminants.
+    Good libraries have little unexplained overrepresentation after accounting for the RNA protocol.
+    High levels of adapters, rRNA in a depleted library, or unexpected sequences can indicate library-preparation problems or contamination.
+  fastqc_top_overrepresented_sequences: >-
+    This table lists the most frequent overrepresented sequences and any suggested sources.
+    Source matches are clues to investigate rather than definitive identifications.
+    Good libraries show few unexplained sequences, with abundant hits consistent with the intended RNA population.
+    Prominent adapter or unexpected contaminant hits warrant checking trimming and library preparation.
+  fastqc_adapter_content: >-
+    This plot shows recognized adapter sequence content across read positions.
+    Increasing adapter content toward read ends often reflects sequencing beyond short RNA inserts.
+    Good processed reads have little residual adapter sequence.
+    Substantial adapter content can interfere with alignment and indicates a need to check trimming, although read-through is common in raw short-insert cfRNA libraries.
+  fastqc_status_checks: >-
+    This panel summarizes FastQC pass, warning, and fail flags for each sample.
+    The flags use general thresholds rather than RNA-specific acceptance criteria.
+    Good libraries pass the relevant quality checks and have protocol-consistent explanations for remaining warnings.
+    Multiple unexplained failures, especially for base quality, N content, or adapters, warrant investigation before downstream analysis.
+  picard-markduplicates: >-
+    This module reports alignments marked as duplicates by Picard.
+    Duplicate rates depend on input amount, sequencing depth, and transcript abundance.
+    Good libraries retain enough non-duplicate reads for the intended analysis and have complexity consistent with comparable samples.
+    Extreme duplication with few usable reads can indicate low input or overamplification, although coordinate duplicates in RNA do not necessarily represent PCR copies.
+MULTIQC_CONFIG_YAML
 
 echo "Created MultiQC config:"
 echo "$MULTIQC_CONFIG"

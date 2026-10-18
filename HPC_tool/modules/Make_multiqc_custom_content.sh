@@ -221,10 +221,12 @@ QC_GUIDANCE = {
     ),
     "custom_fastqc_parsed_metrics": (
         'This table summarizes read-end quality, the lowest positional mean quality, GC peak, and '
-        'adapter content from FastQC. GC reflects the sequenced RNA mixture and library preparation, '
-        'so 41% is not a reliable RNA/DNA cutoff. Good reads retain high Phred quality, ideally near '
-        'Q40 where supported by the platform, with little residual adapter and an expected GC '
-        'profile. Low quality, excess adapters, or unexpected GC peaks warrant investigation.'
+        'adapter content from FastQC. Human DNA typically peaks near 41% GC, whereas human RNA '
+        'libraries often peak at higher GC percentages. Good reads retain high Phred quality, '
+        'ideally near Q40 where supported by the platform, with little residual adapter and a GC '
+        'profile consistent with comparable cfRNA libraries. Low quality, excess adapters, or a GC '
+        'peak near 41% warrant investigation, but GC is only a supporting indicator of DNA '
+        'contamination because transcript composition and library preparation affect the profile.'
     ),
     "custom_insert_size_distribution_summary": (
         'This section summarizes paired-end insert sizes using the selected genomic or transcriptomic '
